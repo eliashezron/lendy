@@ -1,0 +1,3 @@
+[submodule "lendy/lib/forge-std"]
+	path = lendy/lib/forge-std
+	url = https://github.com/foundry-rs/forge-std
