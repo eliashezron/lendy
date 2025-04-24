@@ -4,3 +4,6 @@
 [submodule "lendy/lib/aave-v3-core"]
 	path = lendy/lib/aave-v3-core
 	url = https://github.com/aave/aave-v3-core
+[submodule "lendy/lib/aave-v3-periphery"]
+	path = lendy/lib/aave-v3-periphery
+	url = https://github.com/aave/aave-v3-periphery
