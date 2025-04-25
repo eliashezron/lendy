@@ -2,5 +2,12 @@
 src = "src"
 out = "out"
 libs = ["lib"]
+via_ir = true  # Enable IR-based compilation to handle stack too deep errors
 
-# See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
+[rpc_endpoints]
+celo_alfajores = "https://alfajores-forno.celo-testnet.org"
+
+[etherscan]
+celo_alfajores = { key = "INPUT_ETHERSCAN_API_KEY", url = "https://api-alfajores.celoscan.io/api" }
+
+# See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options 

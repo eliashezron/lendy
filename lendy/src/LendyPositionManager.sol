@@ -63,6 +63,16 @@ contract LendyPositionManager is Ownable {
 
     event DebtRepaid(uint256 indexed positionId, uint256 amount);
 
+    event PositionLiquidated(
+        uint256 indexed positionId,
+        address indexed owner,
+        address indexed liquidator,
+        address collateralAsset,
+        address debtAsset,
+        uint256 debtToCover,
+        uint256 liquidatedCollateralAmount
+    );
+
     // ============ Constructor ============
 
     /**
@@ -159,6 +169,46 @@ contract LendyPositionManager is Ownable {
     }
 
     /**
+     * @notice Adds collateral to an existing position using permit
+     * @param positionId The ID of the position
+     * @param additionalAmount The additional amount of collateral to add
+     * @param deadline The deadline timestamp for the permit signature
+     * @param permitV The V parameter of EIP-712 signature
+     * @param permitR The R parameter of EIP-712 signature
+     * @param permitS The S parameter of EIP-712 signature
+     */
+    function addCollateralWithPermit(
+        uint256 positionId,
+        uint256 additionalAmount,
+        uint256 deadline,
+        uint8 permitV,
+        bytes32 permitR,
+        bytes32 permitS
+    ) external {
+        Position storage position = positions[positionId];
+        require(position.active, "Position is not active");
+        require(position.owner == msg.sender, "Not position owner");
+        require(additionalAmount > 0, "Amount must be greater than 0");
+
+        // Supply collateral directly using permit
+        lendyProtocol.supplyWithPermit(
+            position.collateralAsset,
+            additionalAmount,
+            address(this), // onBehalfOf
+            0, // referralCode
+            deadline,
+            permitV,
+            permitR,
+            permitS
+        );
+
+        // Update position collateral amount
+        position.collateralAmount += additionalAmount;
+
+        emit CollateralAdded(positionId, additionalAmount);
+    }
+
+    /**
      * @notice Repays debt for an existing position
      * @param positionId The ID of the position
      * @param amount The amount of debt to repay
@@ -189,6 +239,53 @@ contract LendyPositionManager is Ownable {
         }
 
         emit DebtRepaid(positionId, repaidAmount);
+    }
+
+    /**
+     * @notice Repays debt for an existing position using permit
+     * @param positionId The ID of the position
+     * @param amount The amount of debt to repay
+     * @param deadline The deadline timestamp for the permit signature
+     * @param permitV The V parameter of EIP-712 signature
+     * @param permitR The R parameter of EIP-712 signature
+     * @param permitS The S parameter of EIP-712 signature
+     * @return repaidAmount The amount of debt repaid
+     */
+    function repayDebtWithPermit(
+        uint256 positionId,
+        uint256 amount,
+        uint256 deadline,
+        uint8 permitV,
+        bytes32 permitR,
+        bytes32 permitS
+    ) external returns (uint256) {
+        Position storage position = positions[positionId];
+        require(position.active, "Position is not active");
+        require(position.owner == msg.sender, "Not position owner");
+        require(amount > 0, "Amount must be greater than 0");
+        
+        // Repay debt using permit
+        uint256 repaidAmount = lendyProtocol.repayWithPermit(
+            position.borrowAsset,
+            amount,
+            position.interestRateMode,
+            address(this), // onBehalfOf
+            deadline,
+            permitV,
+            permitR,
+            permitS
+        );
+
+        // Update position borrow amount
+        if (amount >= position.borrowAmount) {
+            position.borrowAmount = 0;
+        } else {
+            position.borrowAmount -= repaidAmount;
+        }
+
+        emit DebtRepaid(positionId, repaidAmount);
+        
+        return repaidAmount;
     }
 
     /**
@@ -240,6 +337,61 @@ contract LendyPositionManager is Ownable {
     }
 
     /**
+     * @notice Closes a position by repaying all debt with permit and withdrawing all collateral
+     * @param positionId The ID of the position
+     * @param deadline The deadline timestamp for the permit signature
+     * @param permitV The V parameter of EIP-712 signature
+     * @param permitR The R parameter of EIP-712 signature
+     * @param permitS The S parameter of EIP-712 signature
+     */
+    function closePositionWithPermit(
+        uint256 positionId,
+        uint256 deadline,
+        uint8 permitV,
+        bytes32 permitR,
+        bytes32 permitS
+    ) external {
+        Position storage position = positions[positionId];
+        require(position.active, "Position is not active");
+        require(position.owner == msg.sender, "Not position owner");
+
+        // Check the current remaining debt
+        (,,,,, uint256 healthFactor) = lendyProtocol.getUserAccountData(address(this));
+        
+        // Require healthy position
+        require(healthFactor > 1e18, "Unhealthy position");
+
+        // If there's any remaining debt, repay it with permit
+        if (position.borrowAmount > 0) {
+            // Repay the debt using permit
+            lendyProtocol.repayWithPermit(
+                position.borrowAsset,
+                position.borrowAmount,
+                position.interestRateMode,
+                address(this),
+                deadline,
+                permitV,
+                permitR,
+                permitS
+            );
+        }
+
+        // Withdraw the collateral back to the user
+        uint256 withdrawnAmount = lendyProtocol.withdraw(
+            position.collateralAsset,
+            type(uint256).max, // withdraw all
+            msg.sender
+        );
+
+        // Mark position as inactive
+        position.active = false;
+        position.borrowAmount = 0;
+        position.collateralAmount = 0;
+
+        emit PositionClosed(positionId, msg.sender);
+    }
+
+    /**
      * @notice Get all positions owned by a user
      * @param user The user address
      * @return Array of position IDs
@@ -255,5 +407,74 @@ contract LendyPositionManager is Ownable {
      */
     function getPositionDetails(uint256 positionId) external view returns (Position memory) {
         return positions[positionId];
+    }
+
+    /**
+     * @notice Liquidates an unhealthy position
+     * @param positionId The ID of the position to liquidate
+     * @param debtToCover The amount of debt to cover
+     * @param receiveAToken Whether to receive aTokens instead of the underlying collateral
+     * @return liquidatedCollateralAmount The amount of collateral liquidated
+     * @return debtAmount The amount of debt covered
+     */
+    function liquidatePosition(
+        uint256 positionId,
+        uint256 debtToCover,
+        bool receiveAToken
+    ) external returns (uint256 liquidatedCollateralAmount, uint256 debtAmount) {
+        Position storage position = positions[positionId];
+        require(position.active, "Position is not active");
+        require(msg.sender != position.owner, "Owner cannot liquidate own position");
+        
+        // Get the current health factor of the position
+        (,,,,, uint256 healthFactor) = lendyProtocol.getUserAccountData(address(this));
+        
+        // Ensure the position is unhealthy (health factor < 1.0)
+        require(healthFactor < 1e18, "Position is healthy");
+        
+        // Transfer debt tokens from liquidator to this contract
+        IERC20(position.borrowAsset).safeTransferFrom(msg.sender, address(this), debtToCover);
+        SafeERC20.forceApprove(IERC20(position.borrowAsset), address(lendyProtocol), debtToCover);
+        
+        // Call Aave liquidation 
+        (liquidatedCollateralAmount, debtAmount) = lendyProtocol.liquidationCall(
+            position.collateralAsset,
+            position.borrowAsset,
+            address(this),
+            debtToCover,
+            receiveAToken
+        );
+        
+        // Update position data after liquidation, ensuring no underflows
+        position.borrowAmount = position.borrowAmount > debtAmount ? position.borrowAmount - debtAmount : 0;
+        position.collateralAmount = position.collateralAmount > liquidatedCollateralAmount ? 
+                                    position.collateralAmount - liquidatedCollateralAmount : 0;
+        
+        // If the position was fully liquidated, mark it as inactive
+        if (position.borrowAmount == 0 || position.collateralAmount == 0) {
+            position.active = false;
+        }
+        
+        // Transfer any remaining collateral to the liquidator (if receiveAToken is false, it will be handled by Aave)
+        if (receiveAToken) {
+            // If the liquidator chose to receive aTokens, we need to transfer them
+            // Get the aToken address for the collateral asset
+            address aTokenAddress = lendyProtocol.getReserveAToken(position.collateralAsset);
+            
+            // Transfer the aTokens to the liquidator
+            IERC20(aTokenAddress).safeTransfer(msg.sender, liquidatedCollateralAmount);
+        }
+        
+        emit PositionLiquidated(
+            positionId,
+            position.owner,
+            msg.sender,
+            position.collateralAsset,
+            position.borrowAsset,
+            debtAmount,
+            liquidatedCollateralAmount
+        );
+        
+        return (liquidatedCollateralAmount, debtAmount);
     }
 } 

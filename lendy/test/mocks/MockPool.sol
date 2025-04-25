@@ -229,4 +229,10 @@ contract MockPool {
         // Return the same amount as requested for simplicity
         return amount;
     }
+    
+    function getReserveAToken(address asset) external view returns (address) {
+        // This is a mock implementation that returns the asset address itself
+        // In a real scenario, this would return the associated aToken address
+        return asset;
+    }
 } 

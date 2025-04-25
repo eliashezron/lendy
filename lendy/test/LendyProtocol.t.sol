@@ -299,4 +299,56 @@ contract LendyProtocolTest is Test {
         assertEq(alicePositions.length, 1);
         assertEq(alicePositions[0], positionId);
     }
+    
+    function testLiquidatePosition() public {
+        uint256 collateralAmount = 10 * 1e18; // 10 WETH
+        uint256 borrowAmount = 5000 * 1e6; // 5,000 USDC
+        uint256 debtToCover = 1000 * 1e6; // 1,000 USDC for liquidation
+        uint256 interestRateMode = 2; // Variable rate
+        
+        // Mint tokens to the MockPool
+        usdc.mint(address(mockPool), 5000 * 1e6);
+        weth.mint(address(mockPool), 20 * 1e18);
+        
+        // Also mint USDC to the position manager
+        usdc.mint(address(positionManager), borrowAmount);
+        
+        // First, Alice creates a position
+        vm.startPrank(alice);
+        uint256 positionId = positionManager.createPosition(
+            address(weth),
+            collateralAmount,
+            address(usdc),
+            borrowAmount,
+            interestRateMode
+        );
+        vm.stopPrank();
+        
+        // Set health factor to an unhealthy level
+        mockPool.setMockHealthFactor(0.9e18); // 0.9, which is below the 1.0 threshold
+        
+        // Bob will liquidate Alice's position
+        vm.startPrank(bob);
+        usdc.approve(address(positionManager), debtToCover);
+        
+        (uint256 liquidatedCollateral, uint256 debt) = positionManager.liquidatePosition(
+            positionId,
+            debtToCover,
+            false
+        );
+        vm.stopPrank();
+        
+        // Check the position state after liquidation
+        LendyPositionManager.Position memory position = positionManager.getPositionDetails(positionId);
+        
+        // Verify the expected changes
+        assertEq(debt, debtToCover);
+        assertEq(liquidatedCollateral, debtToCover * 105 / 100); // 5% bonus
+        
+        // The position should have reduced collateral and debt
+        assertEq(position.borrowAmount, borrowAmount - debtToCover);
+        assertEq(position.collateralAmount, collateralAmount - liquidatedCollateral);
+        assertEq(position.active, true); // Position is still active after partial liquidation
+    }
+
 } 
