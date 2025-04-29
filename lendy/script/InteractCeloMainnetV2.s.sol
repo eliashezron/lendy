@@ -1,0 +1,603 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.19;
+
+import {Script} from "forge-std/Script.sol";
+import {console} from "../lib/forge-std/src/console.sol";
+import {LendyProtocol} from "../src/LendyProtocol.sol";
+import {LendyPositionManager} from "../src/LendyPositionManager.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IPool} from "@aave-v3-core/contracts/interfaces/IPool.sol";
+import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
+
+/**
+ * @title InteractCeloMainnetV2
+ * @notice Script focused on creating and managing positions with LendyPositionManager on Celo mainnet
+ */
+contract InteractCeloMainnetV2 is Script {
+    // Custom log function to avoid console.log issues
+    function logMessage(string memory message) internal pure {
+        console.logString(message);
+    }
+    
+    function logMessage(string memory message, uint256 value) internal pure {
+        console.logString(string(abi.encodePacked(message, " ", Strings.toString(value))));
+    }
+    
+    function logMessage(string memory message, address value) internal pure {
+        console.logString(string(abi.encodePacked(message, " ", Strings.toHexString(uint160(value), 20))));
+    }
+    
+    // Add string parameter overload
+    function logMessage(string memory prefix, string memory value) internal pure {
+        console.logString(string(abi.encodePacked(prefix, " ", value)));
+    }
+    
+    // Add overloads for multiple params
+    function logMessage(string memory prefix, uint256 value, string memory suffix) internal pure {
+        console.logString(string(abi.encodePacked(prefix, " ", Strings.toString(value), " ", suffix)));
+    }
+
+    function logMessage(string memory prefix, address value, string memory suffix) internal pure {
+        console.logString(string(abi.encodePacked(prefix, " ", Strings.toHexString(uint160(value), 20), " ", suffix)));
+    }
+
+    // Add a function for position details
+    function logPositionDetails(LendyPositionManager.Position memory position) internal pure {
+        logMessage("  Owner:", position.owner);
+        logMessage("  Collateral Asset:", position.collateralAsset);
+        logMessage("  Collateral Amount:", position.collateralAmount);
+        logMessage("  Borrow Asset:", position.borrowAsset);
+        logMessage("  Borrow Amount:", position.borrowAmount);
+        logMessage("  Interest Rate Mode:", position.interestRateMode);
+        
+        // Handle boolean separately
+        if (position.active) {
+            console.logString("  Active: true");
+        } else {
+            console.logString("  Active: false");
+        }
+    }
+    
+    // Contract addresses - update these with your deployed addresses
+    address public LENDY_PROTOCOL = 0x8A05C0a366abb49b56A44b37A5Fe281957DE2c37;
+    address public LENDY_POSITION_MANAGER = 0xEB1CA1B5e9a1396dD5Fdd58Fe27e0C64ba6905Af;
+    
+    // Celo mainnet token addresses
+    address public constant USDT = 0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e;
+    address public constant USDT_ADAPTER = 0x0E2A3e05bc9A16F5292A6170456A710cb89C6f72; // Fixed checksum
+    address public constant USDC = 0xcebA9300f2b948710d2653dD7B07f33A8B32118C;
+    address public constant CUSD = 0x765DE816845861e75A25fCA122bb6898B8B1282a;
+    
+    // AAVE V3 Pool on Celo mainnet (for reference only)
+    address public constant AAVE_POOL = 0x3E59A31363E2ad014dcbc521c4a0d5757d9f3402;
+    
+    // Variables
+    LendyProtocol public lendyProtocol;
+    LendyPositionManager public positionManager;
+    address public user;
+    uint256 public userPrivateKey;
+    
+    // Test function to run from env
+    string public testFunction;
+    
+    // Position ID for tracking
+    uint256 public currentPositionId;
+
+    function setUp() public {
+        // Process private key from environment variable
+        try vm.envUint("CELO_MAINNET_PRIVATE_KEY") returns (uint256 pk) {
+            userPrivateKey = pk;
+        } catch {
+            string memory pkString = vm.envString("CELO_MAINNET_PRIVATE_KEY");
+            if (bytes(pkString).length > 0 && bytes(pkString)[0] == "0" && bytes(pkString)[1] == "x") {
+                userPrivateKey = vm.parseUint(pkString);
+            } else {
+                userPrivateKey = vm.parseUint(string(abi.encodePacked("0x", pkString)));
+            }
+        }
+        
+        user = vm.addr(userPrivateKey);
+        lendyProtocol = LendyProtocol(LENDY_PROTOCOL);
+        positionManager = LendyPositionManager(LENDY_POSITION_MANAGER);
+        
+        // Get the test function to run from environment variable, default to "create"
+        try vm.envString("TEST_FUNCTION") returns (string memory tf) {
+            if (bytes(tf).length > 0) {
+                testFunction = tf;
+            } else {
+                testFunction = "create";
+            }
+        } catch {
+            testFunction = "create";
+        }
+    }
+
+    function run() public {
+        logMessage("=== Position Management with LendyPositionManager on Celo Mainnet ===");
+        logMessage("User address:", user);
+        logMessage("LendyProtocol address:", LENDY_PROTOCOL);
+        logMessage("LendyPositionManager address:", LENDY_POSITION_MANAGER);
+        logMessage(string(abi.encodePacked("Selected test function: ", testFunction)));
+        
+        vm.startBroadcast(userPrivateKey);
+        
+        // Check balances and account data
+        checkBalancesAndStatus();
+        
+        // Run the requested operation
+        if (keccak256(abi.encodePacked(testFunction)) == keccak256(abi.encodePacked("create"))) {
+            createPosition();
+        } 
+        else if (keccak256(abi.encodePacked(testFunction)) == keccak256(abi.encodePacked("add"))) {
+            addCollateral();
+        }
+        else if (keccak256(abi.encodePacked(testFunction)) == keccak256(abi.encodePacked("withdraw"))) {
+            withdrawCollateral();
+        }
+        else if (keccak256(abi.encodePacked(testFunction)) == keccak256(abi.encodePacked("repay"))) {
+            repayDebt();
+        }
+        else if (keccak256(abi.encodePacked(testFunction)) == keccak256(abi.encodePacked("close"))) {
+            closePosition();
+        }
+        else if (keccak256(abi.encodePacked(testFunction)) == keccak256(abi.encodePacked("list"))) {
+            listPositions();
+        }
+        else {
+            logMessage("Unknown test function. Available options: create, add, withdraw, repay, close, list");
+        }
+        
+        // Check final status
+        checkBalancesAndStatus();
+        
+        vm.stopBroadcast();
+    }
+    
+    function checkBalancesAndStatus() internal {
+        logMessage("\n=== Current Balances and Status ===");
+        
+        // Check token balances
+        uint256 usdtBalance = IERC20(USDT).balanceOf(user);
+        uint256 usdcBalance = IERC20(USDC).balanceOf(user);
+        uint256 cusdBalance = IERC20(CUSD).balanceOf(user);
+        
+        logMessage("USDT balance:", usdtBalance);
+        logMessage("USDC balance:", usdcBalance);
+        logMessage("cUSD balance:", cusdBalance);
+        
+        // Check user account data from LendyProtocol
+        try lendyProtocol.getUserAccountData(user) returns (
+            uint256 totalCollateralBase,
+            uint256 totalDebtBase,
+            uint256 availableBorrowsBase,
+            uint256 currentLiquidationThreshold,
+            uint256 ltv,
+            uint256 healthFactor
+        ) {
+            logMessage("\nAccount data from LendyProtocol:");
+            logMessage("Total Collateral (USD):", totalCollateralBase);
+            logMessage("Total Debt (USD):", totalDebtBase);
+            logMessage("Available Borrows (USD):", availableBorrowsBase);
+            logMessage("Current Liquidation Threshold:", currentLiquidationThreshold);
+            logMessage("LTV:", ltv);
+            logMessage("Health Factor:", healthFactor);
+        } catch {
+            logMessage("Failed to get user account data from LendyProtocol");
+        }
+        
+        // Get user positions
+        try positionManager.getUserPositions(user) returns (uint256[] memory positionIds) {
+            logMessage("\nUser has", positionIds.length, "positions");
+            
+            // If we have a specific position ID to check
+            if (currentPositionId > 0) {
+                try positionManager.getPositionDetails(currentPositionId) returns (LendyPositionManager.Position memory position) {
+                    logMessage("\nPosition", currentPositionId, "details:");
+                    logPositionDetails(position);
+                } catch {
+                    logMessage("\nFailed to get position details for ID:", currentPositionId);
+                }
+            }
+        } catch {
+            logMessage("Failed to get user's positions");
+        }
+    }
+    
+    function createPosition() internal {
+        logMessage("\n=== Creating Minimal Position ===");
+        
+        // Check USDT balance for collateral
+        uint256 usdtBalance = IERC20(USDT).balanceOf(user);
+        logMessage("USDT balance:", usdtBalance);
+        
+        // Use extremely small amounts
+        uint256 collateralAmount = 10000; // 0.0001 USDT (6 decimals)
+        uint256 borrowAmount = 1000;      // 0.00001 USDC (6 decimals)
+        
+        if (usdtBalance < collateralAmount) {
+            logMessage("Not enough USDT for collateral. Need at least 0.0001 USDT.");
+            return;
+        }
+        
+        // Reset approvals to 0 first (to handle any quirks with the USDT token)
+        // logMessage("Resetting approvals to 0...");
+        // IERC20(USDT).approve(AAVE_POOL, 0);
+        // IERC20(USDT).approve(LENDY_POSITION_MANAGER, 0);
+        
+        // Approve with larger amount to ensure enough allowance
+        logMessage("Setting new approvals...");
+        IERC20(USDT).approve(AAVE_POOL, collateralAmount); 
+        IERC20(USDT).approve(LENDY_POSITION_MANAGER, collateralAmount);
+        
+        // Skip pre-supply since it seems to be working
+        
+        logMessage("Creating position with minimal amounts:");
+        logMessage("  Collateral: USDT, Amount:", collateralAmount);
+        logMessage("  Borrow: USDC, Amount:", borrowAmount);
+        
+        try positionManager.createPosition(
+            USDT,
+            collateralAmount,
+            USDC,
+            borrowAmount,
+            2 // Variable rate
+        ) returns (uint256 positionId) {
+            currentPositionId = positionId;
+            logMessage("Successfully created position with ID:", positionId);
+            
+            // Get position details
+            try positionManager.getPositionDetails(positionId) returns (LendyPositionManager.Position memory position) {
+                logMessage("Position details:");
+                logPositionDetails(position);
+            } catch Error(string memory reason) {
+                logMessage("Failed to get position details:", reason);
+            } catch {
+                logMessage("Failed to get position details with unknown error");
+            }
+        } catch Error(string memory reason) {
+            logMessage("Position creation failed:", reason);
+            
+            // Additional debugging info
+            logMessage("Debug: USDT allowance for LENDY_POSITION_MANAGER:", IERC20(USDT).allowance(user, LENDY_POSITION_MANAGER));
+            logMessage("Debug: USDT allowance for AAVE_POOL:", IERC20(USDT).allowance(user, AAVE_POOL));
+            
+        } catch (bytes memory reason) {
+            logMessage("Position creation failed with error data");
+            
+            // Try to extract the error code if it's from AAVE
+            if (reason.length >= 68) {
+                uint256 errorCode;
+                assembly {
+                    errorCode := mload(add(reason, 0x44))
+                }
+                if (errorCode > 0) {
+                    logMessage("AAVE error code:", errorCode);
+                    printAaveError(errorCode);
+                }
+            }
+        }
+    }
+    
+    function addCollateral() internal {
+        logMessage("\n=== Adding Collateral to Existing Position ===");
+        
+        // Get position ID from environment or previous operation
+        getPositionIdToOperateOn();
+        
+        if (currentPositionId == 0) {
+            logMessage("No position ID specified. Set a valid position ID first.");
+            return;
+        }
+        
+        uint256 additionalAmount = 50000; // 0.05 USDT
+        
+        // Check USDT balance
+        uint256 usdtBalance = IERC20(USDT).balanceOf(user);
+        if (usdtBalance < additionalAmount) {
+            logMessage("Not enough USDT. Need at least 0.05 USDT.");
+            return;
+        }
+        
+        // Approve USDT for position manager
+        IERC20(USDT).approve(LENDY_POSITION_MANAGER, additionalAmount);
+        
+        try positionManager.addCollateral(currentPositionId, additionalAmount) {
+            string memory successMsg = string(abi.encodePacked(
+                "Successfully added ", 
+                Strings.toString(additionalAmount), 
+                " USDT to position ", 
+                Strings.toString(currentPositionId)
+            ));
+            logMessage(successMsg);
+        } catch Error(string memory reason) {
+            logMessage("Failed to add collateral:", reason);
+        } catch (bytes memory reason) {
+            logMessage("Failed to add collateral with error data");
+            
+            // Try to extract AAVE error code
+            if (reason.length >= 68) {
+                uint256 errorCode;
+                assembly {
+                    errorCode := mload(add(reason, 0x44))
+                }
+                if (errorCode > 0) {
+                    logMessage("AAVE error code:", errorCode);
+                    printAaveError(errorCode);
+                }
+            }
+        }
+    }
+    
+    function withdrawCollateral() internal {
+        logMessage("\n=== Withdrawing Collateral from Position ===");
+        
+        // Get position ID from environment or previous operation
+        getPositionIdToOperateOn();
+        
+        if (currentPositionId == 0) {
+            logMessage("No position ID specified. Set a valid position ID first.");
+            return;
+        }
+        
+        // Get position details to check available collateral
+        try positionManager.getPositionDetails(currentPositionId) returns (LendyPositionManager.Position memory position) {
+            string memory posMessage = string(abi.encodePacked(
+                "Position ", 
+                Strings.toString(currentPositionId), 
+                " has ", 
+                Strings.toString(position.collateralAmount), 
+                " collateral"
+            ));
+            logMessage(posMessage);
+            
+            // Try to withdraw a small percentage of collateral (20%)
+            uint256 withdrawAmount = position.collateralAmount / 5;
+            
+            if (withdrawAmount == 0) {
+                logMessage("Calculated withdraw amount is 0. Cannot proceed.");
+                return;
+            }
+            
+            string memory withdrawMsg = string(abi.encodePacked(
+                "Attempting to withdraw ", 
+                Strings.toString(withdrawAmount), 
+                " collateral"
+            ));
+            logMessage(withdrawMsg);
+            
+            try positionManager.withdrawCollateral(currentPositionId, withdrawAmount) {
+                string memory successMsg = string(abi.encodePacked(
+                    "Successfully withdrew ", 
+                    Strings.toString(withdrawAmount), 
+                    " collateral from position ", 
+                    Strings.toString(currentPositionId)
+                ));
+                logMessage(successMsg);
+            } catch Error(string memory reason) {
+                logMessage("Failed to withdraw collateral:", reason);
+            } catch (bytes memory reason) {
+                logMessage("Failed to withdraw collateral with error data");
+                
+                // Try to extract AAVE error code
+                if (reason.length >= 68) {
+                    uint256 errorCode;
+                    assembly {
+                        errorCode := mload(add(reason, 0x44))
+                    }
+                    if (errorCode > 0) {
+                        logMessage("AAVE error code:", errorCode);
+                        printAaveError(errorCode);
+                    }
+                }
+            }
+        } catch {
+            logMessage("Failed to get position details");
+        }
+    }
+    
+    function repayDebt() internal {
+        logMessage("\n=== Repaying Debt for Position ===");
+        
+        // Get position ID from environment or previous operation
+        getPositionIdToOperateOn();
+        
+        if (currentPositionId == 0) {
+            logMessage("No position ID specified. Set a valid position ID first.");
+            return;
+        }
+        
+        // Get position details to check debt
+        try positionManager.getPositionDetails(currentPositionId) returns (LendyPositionManager.Position memory position) {
+            string memory debtMsg = string(abi.encodePacked(
+                "Position ", 
+                Strings.toString(currentPositionId), 
+                " has ", 
+                Strings.toString(position.borrowAmount), 
+                " debt in asset ", 
+                Strings.toHexString(uint160(position.borrowAsset), 20)
+            ));
+            logMessage(debtMsg);
+            
+            if (position.borrowAmount == 0) {
+                logMessage("No debt to repay for this position.");
+                return;
+            }
+            
+            // Determine repay asset and check balance
+            address repayAsset = position.borrowAsset;
+            uint256 repayAmount = position.borrowAmount / 2; // Repay half the debt
+            
+            uint256 assetBalance = IERC20(repayAsset).balanceOf(user);
+            console.log("User has", assetBalance, "of the borrow asset");
+            
+            if (assetBalance < repayAmount) {
+                console.log("Not enough balance to repay. Need at least", repayAmount);
+                return;
+            }
+            
+            // Approve for repayment
+            IERC20(repayAsset).approve(LENDY_POSITION_MANAGER, repayAmount);
+            
+            try positionManager.repayDebt(currentPositionId, repayAmount) {
+                console.log("Successfully repaid", repayAmount, "debt for position", currentPositionId);
+            } catch Error(string memory reason) {
+                console.log("Failed to repay debt:", reason);
+            } catch (bytes memory reason) {
+                console.log("Failed to repay debt with error data");
+                
+                // Try to extract AAVE error code
+                if (reason.length >= 68) {
+                    uint256 errorCode;
+                    assembly {
+                        errorCode := mload(add(reason, 0x44))
+                    }
+                    if (errorCode > 0) {
+                        console.log("AAVE error code:", errorCode);
+                        printAaveError(errorCode);
+                    }
+                }
+            }
+        } catch {
+            console.log("Failed to get position details");
+        }
+    }
+    
+    function closePosition() internal {
+        console.log("\n=== Closing Position ===");
+        
+        // Get position ID from environment or previous operation
+        getPositionIdToOperateOn();
+        
+        if (currentPositionId == 0) {
+            console.log("No position ID specified. Set a valid position ID first.");
+            return;
+        }
+        
+        // Get position details to check debt and collateral
+        try positionManager.getPositionDetails(currentPositionId) returns (LendyPositionManager.Position memory position) {
+            console.log("Position", currentPositionId, "details:");
+            console.log("  Debt:", position.borrowAmount, "of asset", position.borrowAsset);
+            console.log("  Collateral:", position.collateralAmount, "of asset", position.collateralAsset);
+            
+            if (position.borrowAmount > 0) {
+                // Check if we have enough of the borrow asset to repay
+                uint256 assetBalance = IERC20(position.borrowAsset).balanceOf(user);
+                console.log("User has", assetBalance, "of the borrow asset");
+                
+                if (assetBalance < position.borrowAmount) {
+                    console.log("Not enough balance to close position. Need", position.borrowAmount);
+                    return;
+                }
+                
+                // Approve for repayment
+                IERC20(position.borrowAsset).approve(LENDY_POSITION_MANAGER, position.borrowAmount);
+            }
+            
+            try positionManager.closePosition(currentPositionId) {
+                console.log("Successfully closed position", currentPositionId);
+            } catch Error(string memory reason) {
+                console.log("Failed to close position:", reason);
+            } catch (bytes memory reason) {
+                console.log("Failed to close position with error data");
+                
+                // Try to extract AAVE error code
+                if (reason.length >= 68) {
+                    uint256 errorCode;
+                    assembly {
+                        errorCode := mload(add(reason, 0x44))
+                    }
+                    if (errorCode > 0) {
+                        console.log("AAVE error code:", errorCode);
+                        printAaveError(errorCode);
+                    }
+                }
+            }
+        } catch {
+            console.log("Failed to get position details");
+        }
+    }
+    
+    function listPositions() internal {
+        console.log("\n=== Listing All User Positions ===");
+        
+        try positionManager.getUserPositions(user) returns (uint256[] memory positionIds) {
+            console.log("User has", positionIds.length, "positions");
+            
+            for (uint256 i = 0; i < positionIds.length; i++) {
+                uint256 positionId = positionIds[i];
+                console.log("\nPosition ID:", positionId);
+                
+                try positionManager.getPositionDetails(positionId) returns (LendyPositionManager.Position memory position) {
+                    console.log("  Owner:", position.owner);
+                    console.log("  Collateral Asset:", position.collateralAsset);
+                    console.log("  Collateral Amount:", position.collateralAmount);
+                    console.log("  Borrow Asset:", position.borrowAsset);
+                    console.log("  Borrow Amount:", position.borrowAmount);
+                    console.log("  Interest Rate Mode:", position.interestRateMode);
+                    console.log("  Active:", position.active);
+                } catch {
+                    console.log("  Failed to get position details");
+                }
+            }
+        } catch {
+            console.log("Failed to get user's positions");
+        }
+    }
+    
+    function getPositionIdToOperateOn() internal {
+        // Try to get position ID from environment variable
+        try vm.envUint("POSITION_ID") returns (uint256 posId) {
+            if (posId > 0) {
+                currentPositionId = posId;
+                console.log("Using position ID from environment:", currentPositionId);
+                return;
+            }
+        } catch {
+            // If not set in environment, keep the current ID if it's valid
+            if (currentPositionId > 0) {
+                console.log("Using current position ID:", currentPositionId);
+                return;
+            }
+            
+            // Otherwise, try to get the first position from the user
+            try positionManager.getUserPositions(user) returns (uint256[] memory positionIds) {
+                if (positionIds.length > 0) {
+                    currentPositionId = positionIds[0];
+                    console.log("Using first available position ID:", currentPositionId);
+                    return;
+                } else {
+                    console.log("User has no positions");
+                }
+            } catch {
+                console.log("Failed to get user's positions");
+            }
+        }
+    }
+    
+    function printAaveError(uint256 errorCode) internal pure {
+        if (errorCode == 1) console.log("AAVE Error: CALLER_NOT_POOL_ADMIN");
+        else if (errorCode == 2) console.log("AAVE Error: CALLER_NOT_EMERGENCY_ADMIN");
+        else if (errorCode == 23) console.log("AAVE Error: CALLER_MUST_BE_POOL");
+        else if (errorCode == 26) console.log("AAVE Error: INVALID_AMOUNT");
+        else if (errorCode == 27) console.log("AAVE Error: RESERVE_INACTIVE");
+        else if (errorCode == 28) console.log("AAVE Error: RESERVE_FROZEN");
+        else if (errorCode == 29) console.log("AAVE Error: RESERVE_PAUSED");
+        else if (errorCode == 30) console.log("AAVE Error: BORROWING_NOT_ENABLED");
+        else if (errorCode == 31) console.log("AAVE Error: STABLE_BORROWING_NOT_ENABLED");
+        else if (errorCode == 32) console.log("AAVE Error: COLLATERAL_BALANCE_IS_ZERO");
+        else if (errorCode == 33) console.log("AAVE Error: HEALTH_FACTOR_LOWER_THAN_LIQUIDATION_THRESHOLD");
+        else if (errorCode == 34) console.log("AAVE Error: COLLATERAL_CANNOT_COVER_NEW_BORROW");
+        else if (errorCode == 35) console.log("AAVE Error: COLLATERAL_SAME_AS_BORROWING_CURRENCY");
+        else if (errorCode == 43) console.log("AAVE Error: UNDERLYING_BALANCE_ZERO - The underlying balance needs to be greater than 0");
+        else if (errorCode == 44) console.log("AAVE Error: HEALTH_FACTOR_NOT_BELOW_THRESHOLD");
+        else if (errorCode == 45) console.log("AAVE Error: COLLATERAL_CANNOT_BE_LIQUIDATED");
+        else if (errorCode == 48) console.log("AAVE Error: BORROW_CAP_EXCEEDED");
+        else if (errorCode == 49) console.log("AAVE Error: SUPPLY_CAP_EXCEEDED");
+        else if (errorCode == 55) console.log("AAVE Error: LTV_VALIDATION_FAILED");
+        else if (errorCode == 57) console.log("AAVE Error: PRICE_ORACLE_SENTINEL_CHECK_FAILED");
+        else if (errorCode == 58) console.log("AAVE Error: ASSET_NOT_BORROWABLE_IN_ISOLATION");
+        else if (errorCode == 59) console.log("AAVE Error: RESERVE_ALREADY_INITIALIZED");
+        else if (errorCode == 60) console.log("AAVE Error: USER_IN_ISOLATION_MODE_OR_LTV_ZERO");
+        else console.log("AAVE Error: Unknown error code", errorCode);
+    }
+} 

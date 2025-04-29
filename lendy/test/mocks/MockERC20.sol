@@ -22,7 +22,7 @@ contract MockERC20 is ERC20 {
         return _decimals;
     }
 
-    function mint(address to, uint256 amount) external {
+    function mint(address to, uint256 amount) public {
         _mint(to, amount);
     }
 

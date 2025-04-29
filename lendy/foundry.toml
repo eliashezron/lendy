@@ -6,8 +6,10 @@ via_ir = true  # Enable IR-based compilation to handle stack too deep errors
 
 [rpc_endpoints]
 celo_alfajores = "https://alfajores-forno.celo-testnet.org"
+celo_mainnet = "https://forno.celo.org"
 
 [etherscan]
-celo_alfajores = { key = "INPUT_ETHERSCAN_API_KEY", url = "https://api-alfajores.celoscan.io/api" }
+celo_alfajores = { key = "SDI34EX5P399MCMEY4ANM87GHED8ZT8YZA", url = "https://api-alfajores.celoscan.io/api" }
+celo_mainnet = { key = "SDI34EX5P399MCMEY4ANM87GHED8ZT8YZA", url = "https://api.celoscan.io/api" }
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options 

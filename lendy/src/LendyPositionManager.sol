@@ -4,8 +4,8 @@ pragma solidity ^0.8.19;
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 
-import {LendyProtocol} from "./LendyProtocol.sol";
 import {IPool} from "@aave-v3-core/contracts/interfaces/IPool.sol";
 import {IPoolAddressesProvider} from "@aave-v3-core/contracts/interfaces/IPoolAddressesProvider.sol";
 import {DataTypes} from "@aave-v3-core/contracts/protocol/libraries/types/DataTypes.sol";
@@ -13,7 +13,7 @@ import {DataTypes} from "@aave-v3-core/contracts/protocol/libraries/types/DataTy
 /**
  * @title LendyPositionManager
  * @author eliashezron
- * @notice Contract for managing user lending and borrowing positions
+ * @notice Contract for managing user lending and borrowing positions directly with Aave Pool
  * @dev This contract allows users to create positions with specific collateral and borrow parameters
  */
 contract LendyPositionManager is Ownable {
@@ -33,11 +33,17 @@ contract LendyPositionManager is Ownable {
 
     // ============ State Variables ============
 
-    // The Lendy Protocol contract
-    LendyProtocol public lendyProtocol;
+    // The Aave Pool contract for lending and borrowing
+    IPool public immutable POOL;
 
     // Position ID counter
     uint256 private _nextPositionId;
+
+    // Total number of active positions
+    uint256 public totalActivePositions;
+
+    // Mapping to track total borrowed amount by asset
+    mapping(address => uint256) public totalBorrowedByAsset;
 
     // Mapping of position ID to Position struct
     mapping(uint256 => Position) public positions;
@@ -60,8 +66,12 @@ contract LendyPositionManager is Ownable {
     event PositionClosed(uint256 indexed positionId, address indexed owner);
 
     event CollateralAdded(uint256 indexed positionId, uint256 amount);
+    
+    event CollateralWithdrawn(uint256 indexed positionId, uint256 amount);
 
     event DebtRepaid(uint256 indexed positionId, uint256 amount);
+    
+    event DebtIncreased(uint256 indexed positionId, uint256 amount);
 
     event PositionLiquidated(
         uint256 indexed positionId,
@@ -76,11 +86,12 @@ contract LendyPositionManager is Ownable {
     // ============ Constructor ============
 
     /**
-     * @param _lendyProtocol The address of the LendyProtocol contract
+     * @param poolAddress The address of the Aave Pool contract
      */
-    constructor(address _lendyProtocol) Ownable(msg.sender) {
-        lendyProtocol = LendyProtocol(_lendyProtocol);
+    constructor(address poolAddress) Ownable(msg.sender) {
+        POOL = IPool(poolAddress);
         _nextPositionId = 1;
+        totalActivePositions = 0;
     }
 
     // ============ External Functions ============
@@ -118,20 +129,46 @@ contract LendyPositionManager is Ownable {
 
         // Add position to user's positions
         _userPositions[msg.sender].push(positionId);
+        
+        // Increment total active positions counter
+        totalActivePositions++;
 
-        // Transfer collateral from user and supply to Aave via LendyProtocol
+        // Transfer collateral from user and supply to Aave
         IERC20(collateralAsset).safeTransferFrom(msg.sender, address(this), collateralAmount);
-        SafeERC20.forceApprove(IERC20(collateralAsset), address(lendyProtocol), collateralAmount);
-        lendyProtocol.supply(collateralAsset, collateralAmount, address(this), 0);
+        SafeERC20.forceApprove(IERC20(collateralAsset), address(POOL), collateralAmount);
+        
+        // Supply to Aave Pool
+        POOL.supply(collateralAsset, collateralAmount, address(this), 0);
 
-        // Set collateral to be used as collateral
-        lendyProtocol.setUserUseReserveAsCollateral(collateralAsset, true);
+        // Set asset to be used as collateral
+        POOL.setUserUseReserveAsCollateral(collateralAsset, true);
 
-        // Borrow the specified asset on behalf of this contract
-        lendyProtocol.borrow(borrowAsset, borrowAmount, interestRateMode, 0, address(this));
-
-        // Transfer borrowed funds to the user
-        IERC20(borrowAsset).safeTransfer(msg.sender, borrowAmount);
+        // Try to borrow 
+        try POOL.borrow(borrowAsset, borrowAmount, interestRateMode, 0, address(this)) {
+            // Transfer borrowed funds to the user
+            IERC20(borrowAsset).safeTransfer(msg.sender, borrowAmount);
+            
+            // Update total borrowed amount for this asset
+            totalBorrowedByAsset[borrowAsset] += borrowAmount;
+        } catch {
+            // If borrowing fails with the full amount, try half the amount
+            uint256 reducedAmount = borrowAmount / 2;
+            if (reducedAmount > 0) {
+                try POOL.borrow(borrowAsset, reducedAmount, interestRateMode, 0, address(this)) {
+                    // Update the position with the actual borrowed amount
+                    position.borrowAmount = reducedAmount;
+                    // Transfer the reduced borrowed funds to the user
+                    IERC20(borrowAsset).safeTransfer(msg.sender, reducedAmount);
+                    
+                    // Update total borrowed amount for this asset with the reduced amount
+                    totalBorrowedByAsset[borrowAsset] += reducedAmount;
+                } catch {
+                    revert("All borrow attempts failed");
+                }
+            } else {
+                revert("All borrow attempts failed");
+            }
+        }
 
         emit PositionCreated(
             positionId,
@@ -139,7 +176,7 @@ contract LendyPositionManager is Ownable {
             collateralAsset,
             collateralAmount,
             borrowAsset,
-            borrowAmount,
+            position.borrowAmount,
             interestRateMode
         );
 
@@ -157,10 +194,15 @@ contract LendyPositionManager is Ownable {
         require(position.owner == msg.sender, "Not position owner");
         require(additionalAmount > 0, "Amount must be greater than 0");
 
-        // Transfer additional collateral from user and supply to Aave via LendyProtocol
+        // Transfer additional collateral from user
         IERC20(position.collateralAsset).safeTransferFrom(msg.sender, address(this), additionalAmount);
-        SafeERC20.forceApprove(IERC20(position.collateralAsset), address(lendyProtocol), additionalAmount);
-        lendyProtocol.supply(position.collateralAsset, additionalAmount, address(this), 0);
+        
+        // Supply additional collateral to Aave
+        SafeERC20.forceApprove(IERC20(position.collateralAsset), address(POOL), additionalAmount);
+        POOL.supply(position.collateralAsset, additionalAmount, address(this), 0);
+
+        // Make sure collateral is enabled
+        POOL.setUserUseReserveAsCollateral(position.collateralAsset, true);
 
         // Update position collateral amount
         position.collateralAmount += additionalAmount;
@@ -190,22 +232,119 @@ contract LendyPositionManager is Ownable {
         require(position.owner == msg.sender, "Not position owner");
         require(additionalAmount > 0, "Amount must be greater than 0");
 
-        // Supply collateral directly using permit
-        lendyProtocol.supplyWithPermit(
-            position.collateralAsset,
+        // Execute the permit to allow this contract to transfer tokens
+        IERC20Permit(position.collateralAsset).permit(
+            msg.sender,
+            address(this),
             additionalAmount,
-            address(this), // onBehalfOf
-            0, // referralCode
             deadline,
             permitV,
             permitR,
             permitS
         );
-
+        
+        // Transfer tokens after permit
+        IERC20(position.collateralAsset).safeTransferFrom(msg.sender, address(this), additionalAmount);
+        
+        // Supply to Aave
+        SafeERC20.forceApprove(IERC20(position.collateralAsset), address(POOL), additionalAmount);
+        POOL.supply(position.collateralAsset, additionalAmount, address(this), 0);
+        
+        // Make sure collateral is enabled
+        POOL.setUserUseReserveAsCollateral(position.collateralAsset, true);
+        
         // Update position collateral amount
         position.collateralAmount += additionalAmount;
 
         emit CollateralAdded(positionId, additionalAmount);
+    }
+
+    /**
+     * @notice Withdraws collateral from an existing position
+     * @param positionId The ID of the position
+     * @param withdrawAmount The amount of collateral to withdraw
+     * @return The actual amount withdrawn
+     */
+    function withdrawCollateral(uint256 positionId, uint256 withdrawAmount) external returns (uint256) {
+        Position storage position = positions[positionId];
+        require(position.active, "Position is not active");
+        require(position.owner == msg.sender, "Not position owner");
+        require(withdrawAmount > 0, "Amount must be greater than 0");
+        require(withdrawAmount <= position.collateralAmount, "Withdraw amount exceeds collateral");
+        
+        // Check health factor before withdrawal
+        (,,,,, uint256 healthFactor) = POOL.getUserAccountData(address(this));
+        require(healthFactor > 1e18, "Unhealthy position");
+        
+        // Withdraw collateral from Aave
+        uint256 withdrawnAmount = POOL.withdraw(position.collateralAsset, withdrawAmount, msg.sender);
+        
+        // Update position collateral amount
+        position.collateralAmount -= withdrawnAmount;
+        
+        // Check health factor after withdrawal
+        (,,,,, healthFactor) = POOL.getUserAccountData(address(this));
+        require(healthFactor > 1e18, "Withdrawal would make position unhealthy");
+        
+        emit CollateralWithdrawn(positionId, withdrawnAmount);
+        
+        return withdrawnAmount;
+    }
+
+    /**
+     * @notice Increases the borrowed amount for an existing position
+     * @param positionId The ID of the position
+     * @param additionalBorrowAmount The additional amount to borrow
+     * @return The actual additional amount borrowed
+     */
+    function increaseBorrow(uint256 positionId, uint256 additionalBorrowAmount) external returns (uint256) {
+        Position storage position = positions[positionId];
+        require(position.active, "Position is not active");
+        require(position.owner == msg.sender, "Not position owner");
+        require(additionalBorrowAmount > 0, "Amount must be greater than 0");
+        
+        // Check health factor and borrowing capacity before borrowing
+        (,,uint256 availableBorrowsBase,,,uint256 healthFactor) = POOL.getUserAccountData(address(this));
+        require(availableBorrowsBase > 0, "No borrowing capacity");
+        require(healthFactor > 1e18, "Position is already unhealthy");
+        
+        // Try to borrow
+        uint256 borrowedAmount = additionalBorrowAmount;
+        try POOL.borrow(position.borrowAsset, additionalBorrowAmount, position.interestRateMode, 0, address(this)) {
+            // Transfer borrowed funds to the user
+            IERC20(position.borrowAsset).safeTransfer(msg.sender, additionalBorrowAmount);
+            
+            // Update total borrowed amount for this asset
+            totalBorrowedByAsset[position.borrowAsset] += additionalBorrowAmount;
+        } catch {
+            // If borrowing fails, try with reduced amount
+            uint256 reducedAmount = additionalBorrowAmount / 2;
+            if (reducedAmount > 0) {
+                try POOL.borrow(position.borrowAsset, reducedAmount, position.interestRateMode, 0, address(this)) {
+                    borrowedAmount = reducedAmount;
+                    // Transfer reduced borrowed funds to the user
+                    IERC20(position.borrowAsset).safeTransfer(msg.sender, reducedAmount);
+                    
+                    // Update total borrowed amount for this asset with the reduced amount
+                    totalBorrowedByAsset[position.borrowAsset] += reducedAmount;
+                } catch {
+                    revert("All borrow attempts failed");
+                }
+            } else {
+                revert("All borrow attempts failed");
+            }
+        }
+        
+        // Update position borrow amount
+        position.borrowAmount += borrowedAmount;
+        
+        // Verify position health after borrowing
+        (,,,,, healthFactor) = POOL.getUserAccountData(address(this));
+        require(healthFactor > 1e18, "Borrow would make position unhealthy");
+        
+        emit DebtIncreased(positionId, borrowedAmount);
+        
+        return borrowedAmount;
     }
 
     /**
@@ -222,17 +361,24 @@ contract LendyPositionManager is Ownable {
         // Transfer repayment amount from user to this contract
         IERC20(position.borrowAsset).safeTransferFrom(msg.sender, address(this), amount);
         
-        // Repay debt on Aave via LendyProtocol
-        SafeERC20.forceApprove(IERC20(position.borrowAsset), address(lendyProtocol), amount);
-        uint256 repaidAmount = lendyProtocol.repay(
+        // Repay debt to Aave
+        SafeERC20.forceApprove(IERC20(position.borrowAsset), address(POOL), amount);
+        uint256 repaidAmount = POOL.repay(
             position.borrowAsset,
             amount,
             position.interestRateMode,
             address(this)
         );
 
+        // Decrease total borrowed amount tracker
+        if (repaidAmount <= totalBorrowedByAsset[position.borrowAsset]) {
+            totalBorrowedByAsset[position.borrowAsset] -= repaidAmount;
+        } else {
+            totalBorrowedByAsset[position.borrowAsset] = 0;
+        }
+
         // Update position borrow amount
-        if (amount >= position.borrowAmount) {
+        if (repaidAmount >= position.borrowAmount) {
             position.borrowAmount = 0;
         } else {
             position.borrowAmount -= repaidAmount;
@@ -264,20 +410,38 @@ contract LendyPositionManager is Ownable {
         require(position.owner == msg.sender, "Not position owner");
         require(amount > 0, "Amount must be greater than 0");
         
-        // Repay debt using permit
-        uint256 repaidAmount = lendyProtocol.repayWithPermit(
-            position.borrowAsset,
+        // Execute the permit to allow this contract to transfer tokens
+        IERC20Permit(position.borrowAsset).permit(
+            msg.sender,
+            address(this),
             amount,
-            position.interestRateMode,
-            address(this), // onBehalfOf
             deadline,
             permitV,
             permitR,
             permitS
         );
+        
+        // Transfer tokens after permit
+        IERC20(position.borrowAsset).safeTransferFrom(msg.sender, address(this), amount);
+        
+        // Repay to Aave
+        SafeERC20.forceApprove(IERC20(position.borrowAsset), address(POOL), amount);
+        uint256 repaidAmount = POOL.repay(
+            position.borrowAsset,
+            amount,
+            position.interestRateMode,
+            address(this)
+        );
+
+        // Decrease total borrowed amount tracker
+        if (repaidAmount <= totalBorrowedByAsset[position.borrowAsset]) {
+            totalBorrowedByAsset[position.borrowAsset] -= repaidAmount;
+        } else {
+            totalBorrowedByAsset[position.borrowAsset] = 0;
+        }
 
         // Update position borrow amount
-        if (amount >= position.borrowAmount) {
+        if (repaidAmount >= position.borrowAmount) {
             position.borrowAmount = 0;
         } else {
             position.borrowAmount -= repaidAmount;
@@ -297,96 +461,59 @@ contract LendyPositionManager is Ownable {
         require(position.active, "Position is not active");
         require(position.owner == msg.sender, "Not position owner");
 
-        // Check the current remaining debt
-        (,,,,, uint256 healthFactor) = lendyProtocol.getUserAccountData(address(this));
+        // Get the current debt amount (simplified)
+        uint256 currentDebt = position.borrowAmount;
         
-        // Require healthy position
+        // Check the health factor
+        (,,,,, uint256 healthFactor) = POOL.getUserAccountData(address(this));
         require(healthFactor > 1e18, "Unhealthy position");
 
         // If there's any remaining debt, user needs to transfer it for repayment
-        if (position.borrowAmount > 0) {
+        if (currentDebt > 0) {
             IERC20(position.borrowAsset).safeTransferFrom(
                 msg.sender,
                 address(this),
-                position.borrowAmount
+                currentDebt
             );
             
-            // Repay the debt
-            SafeERC20.forceApprove(IERC20(position.borrowAsset), address(lendyProtocol), position.borrowAmount);
-            lendyProtocol.repay(
+            // Repay all debt
+            SafeERC20.forceApprove(IERC20(position.borrowAsset), address(POOL), currentDebt);
+            POOL.repay(
                 position.borrowAsset,
-                position.borrowAmount,
+                type(uint256).max, // repay all
                 position.interestRateMode,
                 address(this)
             );
+            
+            // Update total borrowed amount on closure
+            if (currentDebt <= totalBorrowedByAsset[position.borrowAsset]) {
+                totalBorrowedByAsset[position.borrowAsset] -= currentDebt;
+            } else {
+                totalBorrowedByAsset[position.borrowAsset] = 0;
+            }
         }
 
-        // Withdraw the collateral back to the user
-        uint256 withdrawnAmount = lendyProtocol.withdraw(
-            position.collateralAsset,
-            type(uint256).max, // withdraw all
-            msg.sender
-        );
+        // Store the collateral amount before withdrawing
+        uint256 collateralToWithdraw = position.collateralAmount;
 
-        // Mark position as inactive
-        position.active = false;
-        position.borrowAmount = 0;
-        position.collateralAmount = 0;
-
-        emit PositionClosed(positionId, msg.sender);
-    }
-
-    /**
-     * @notice Closes a position by repaying all debt with permit and withdrawing all collateral
-     * @param positionId The ID of the position
-     * @param deadline The deadline timestamp for the permit signature
-     * @param permitV The V parameter of EIP-712 signature
-     * @param permitR The R parameter of EIP-712 signature
-     * @param permitS The S parameter of EIP-712 signature
-     */
-    function closePositionWithPermit(
-        uint256 positionId,
-        uint256 deadline,
-        uint8 permitV,
-        bytes32 permitR,
-        bytes32 permitS
-    ) external {
-        Position storage position = positions[positionId];
-        require(position.active, "Position is not active");
-        require(position.owner == msg.sender, "Not position owner");
-
-        // Check the current remaining debt
-        (,,,,, uint256 healthFactor) = lendyProtocol.getUserAccountData(address(this));
-        
-        // Require healthy position
-        require(healthFactor > 1e18, "Unhealthy position");
-
-        // If there's any remaining debt, repay it with permit
-        if (position.borrowAmount > 0) {
-            // Repay the debt using permit
-            lendyProtocol.repayWithPermit(
-                position.borrowAsset,
-                position.borrowAmount,
-                position.interestRateMode,
-                address(this),
-                deadline,
-                permitV,
-                permitR,
-                permitS
+        // Withdraw all collateral
+        if (collateralToWithdraw > 0) {
+            POOL.withdraw(
+                position.collateralAsset,
+                collateralToWithdraw,
+                msg.sender
             );
         }
 
-        // Withdraw the collateral back to the user
-        uint256 withdrawnAmount = lendyProtocol.withdraw(
-            position.collateralAsset,
-            type(uint256).max, // withdraw all
-            msg.sender
-        );
-
         // Mark position as inactive
         position.active = false;
         position.borrowAmount = 0;
         position.collateralAmount = 0;
+        
+        // Decrement total active positions counter
+        if (totalActivePositions > 0) {
+            totalActivePositions--;
+        }
 
         emit PositionClosed(positionId, msg.sender);
     }
@@ -427,23 +554,37 @@ contract LendyPositionManager is Ownable {
         require(msg.sender != position.owner, "Owner cannot liquidate own position");
         
         // Get the current health factor of the position
-        (,,,,, uint256 healthFactor) = lendyProtocol.getUserAccountData(address(this));
+        (,,,,, uint256 healthFactor) = POOL.getUserAccountData(address(this));
         
         // Ensure the position is unhealthy (health factor < 1.0)
         require(healthFactor < 1e18, "Position is healthy");
         
         // Transfer debt tokens from liquidator to this contract
         IERC20(position.borrowAsset).safeTransferFrom(msg.sender, address(this), debtToCover);
-        SafeERC20.forceApprove(IERC20(position.borrowAsset), address(lendyProtocol), debtToCover);
         
-        // Call Aave liquidation 
-        (liquidatedCollateralAmount, debtAmount) = lendyProtocol.liquidationCall(
+        // Approve liquidation
+        SafeERC20.forceApprove(IERC20(position.borrowAsset), address(POOL), debtToCover);
+        
+        // Execute liquidation
+        POOL.liquidationCall(
             position.collateralAsset,
             position.borrowAsset,
             address(this),
             debtToCover,
             receiveAToken
         );
+        
+        // For liquidation via Aave, we need to estimate the liquidated amounts
+        // This is a simplified approach - in production you should get these values from events
+        liquidatedCollateralAmount = (debtToCover * 105) / 100; // Assuming 5% liquidation bonus
+        debtAmount = debtToCover;
+        
+        // Update total borrowed amount tracking
+        if (debtAmount <= totalBorrowedByAsset[position.borrowAsset]) {
+            totalBorrowedByAsset[position.borrowAsset] -= debtAmount;
+        } else {
+            totalBorrowedByAsset[position.borrowAsset] = 0;
+        }
         
         // Update position data after liquidation, ensuring no underflows
         position.borrowAmount = position.borrowAmount > debtAmount ? position.borrowAmount - debtAmount : 0;
@@ -453,17 +594,14 @@ contract LendyPositionManager is Ownable {
         // If the position was fully liquidated, mark it as inactive
         if (position.borrowAmount == 0 || position.collateralAmount == 0) {
             position.active = false;
+            
+            // Decrement total active positions counter if position is now inactive
+            if (totalActivePositions > 0) {
+                totalActivePositions--;
+            }
         }
         
-        // Transfer any remaining collateral to the liquidator (if receiveAToken is false, it will be handled by Aave)
-        if (receiveAToken) {
-            // If the liquidator chose to receive aTokens, we need to transfer them
-            // Get the aToken address for the collateral asset
-            address aTokenAddress = lendyProtocol.getReserveAToken(position.collateralAsset);
-            
-            // Transfer the aTokens to the liquidator
-            IERC20(aTokenAddress).safeTransfer(msg.sender, liquidatedCollateralAmount);
-        }
+        // If liquidator chose to receive aTokens, they will be automatically transferred by Aave
         
         emit PositionLiquidated(
             positionId,
@@ -476,5 +614,206 @@ contract LendyPositionManager is Ownable {
         );
         
         return (liquidatedCollateralAmount, debtAmount);
+    }
+    
+    /**
+     * @notice Get the Aave aToken address for the given asset
+     * @param asset The address of the underlying asset
+     * @return The address of the corresponding aToken
+     */
+    function getReserveAToken(address asset) external view returns (address) {
+        DataTypes.ReserveData memory reserveData = POOL.getReserveData(asset);
+        return reserveData.aTokenAddress;
+    }
+
+    /**
+     * @notice Get all active positions owned by a user
+     * @param user The user address
+     * @return Array of active position IDs
+     * @dev This is a more efficient way to get only active positions compared to filtering all positions
+     */
+    function getUserActivePositions(address user) external view returns (uint256[] memory) {
+        uint256[] memory allPositions = _userPositions[user];
+        
+        // First, count active positions
+        uint256 activeCount = 0;
+        for (uint256 i = 0; i < allPositions.length; i++) {
+            if (positions[allPositions[i]].active) {
+                activeCount++;
+            }
+        }
+        
+        // Create result array with exact size needed
+        uint256[] memory activePositions = new uint256[](activeCount);
+        
+        // Fill the result array
+        uint256 resultIndex = 0;
+        for (uint256 i = 0; i < allPositions.length; i++) {
+            if (positions[allPositions[i]].active) {
+                activePositions[resultIndex] = allPositions[i];
+                resultIndex++;
+            }
+        }
+        
+        return activePositions;
+    }
+    
+    /**
+     * @notice Get user positions with full details
+     * @param user The user address
+     * @return Array of Position structs with full details
+     * @dev This function allows getting all position details in a single call
+     */
+    function getUserPositionsWithDetails(address user) external view returns (Position[] memory) {
+        uint256[] memory positionIds = _userPositions[user];
+        Position[] memory userPositions = new Position[](positionIds.length);
+        
+        for (uint256 i = 0; i < positionIds.length; i++) {
+            userPositions[i] = positions[positionIds[i]];
+        }
+        
+        return userPositions;
+    }
+    
+    /**
+     * @notice Admin function to close a position on behalf of a user
+     * @param positionId The ID of the position to close
+     * @param emergencyClose If true, admin can force close a position even if it's unhealthy
+     * @dev This function will try to repay all debt using contract funds and withdraw collateral to the user
+     * @dev It's designed for positions that have no debt or for emergency situations
+     */
+    function adminClosePosition(uint256 positionId, bool emergencyClose) external onlyOwner {
+        Position storage position = positions[positionId];
+        require(position.active, "Position is not active");
+        
+        address positionOwner = position.owner;
+        
+        // Check health factor unless emergency close is enabled
+        if (!emergencyClose) {
+            (,,,,, uint256 healthFactorBefore) = POOL.getUserAccountData(address(this));
+            require(healthFactorBefore > 1e18, "Unhealthy position - use emergencyClose flag to force close");
+        }
+        
+        // Get current debt
+        uint256 currentDebt = position.borrowAmount;
+        
+        // Handle debt repayment if needed
+        if (currentDebt > 0) {
+            // Check if contract has enough of the borrow asset to repay
+            uint256 contractBalance = IERC20(position.borrowAsset).balanceOf(address(this));
+            
+            if (contractBalance >= currentDebt) {
+                // Contract has enough balance to repay
+                SafeERC20.forceApprove(IERC20(position.borrowAsset), address(POOL), currentDebt);
+                POOL.repay(
+                    position.borrowAsset,
+                    type(uint256).max, // repay all
+                    position.interestRateMode,
+                    address(this)
+                );
+                
+                // Update total borrowed amount
+                if (currentDebt <= totalBorrowedByAsset[position.borrowAsset]) {
+                    totalBorrowedByAsset[position.borrowAsset] -= currentDebt;
+                } else {
+                    totalBorrowedByAsset[position.borrowAsset] = 0;
+                }
+            } else {
+                // Not enough balance - require emergency flag
+                require(emergencyClose, "Insufficient contract balance to repay debt - use emergencyClose for partial operations");
+                
+                if (contractBalance > 0) {
+                    // Repay what we can
+                    SafeERC20.forceApprove(IERC20(position.borrowAsset), address(POOL), contractBalance);
+                    POOL.repay(
+                        position.borrowAsset,
+                        contractBalance,
+                        position.interestRateMode,
+                        address(this)
+                    );
+                    
+                    // Update total borrowed amount for partial repayment
+                    if (contractBalance <= totalBorrowedByAsset[position.borrowAsset]) {
+                        totalBorrowedByAsset[position.borrowAsset] -= contractBalance;
+                    } else {
+                        totalBorrowedByAsset[position.borrowAsset] = 0;
+                    }
+                }
+            }
+        }
+        
+        // Withdraw collateral to the user
+        if (position.collateralAmount > 0) {
+            // This will withdraw all available collateral to the user
+            try POOL.withdraw(
+                position.collateralAsset,
+                type(uint256).max, // withdraw all
+                positionOwner // send directly to the position owner
+            ) {} catch {
+                if (emergencyClose) {
+                    // Continue with the function in emergency mode, even if withdraw fails
+                } else {
+                    revert("Failed to withdraw collateral");
+                }
+            }
+        }
+        
+        // Check the updated debt and collateral in Aave
+        (uint256 totalCollateralBase,,,,, uint256 healthFactor) = POOL.getUserAccountData(address(this));
+        
+        // Mark position as inactive if it's safe or in emergency mode
+        if (healthFactor > 1e18 || position.borrowAmount == 0 || emergencyClose) {
+            position.active = false;
+            position.borrowAmount = 0;
+            position.collateralAmount = 0;
+            
+            // Decrement total active positions counter
+            if (totalActivePositions > 0) {
+                totalActivePositions--;
+            }
+            
+            emit PositionClosed(positionId, positionOwner);
+        } else {
+            // If the position is still active but has been modified
+            emit CollateralWithdrawn(positionId, position.collateralAmount);
+            if (currentDebt > position.borrowAmount) {
+                emit DebtRepaid(positionId, currentDebt - position.borrowAmount);
+            }
+        }
+    }
+    
+    /**
+     * @notice Get health factor for the contract
+     * @return The health factor as reported by Aave
+     * @dev This is useful to check the overall health of all positions
+     */
+    function getHealthFactor() external view returns (uint256) {
+        (,,,,, uint256 healthFactor) = POOL.getUserAccountData(address(this));
+        return healthFactor;
+    }
+
+    /**
+     * @notice Get total amount borrowed for a specific asset
+     * @param asset The address of the asset
+     * @return The total amount borrowed for the asset
+     */
+    function getTotalBorrowedByAsset(address asset) external view returns (uint256) {
+        return totalBorrowedByAsset[asset];
+    }
+    
+    /**
+     * @notice Get the total number of active positions
+     * @return The total count of active positions
+     */
+    function getTotalActivePositions() external view returns (uint256) {
+        return totalActivePositions;
+    }
+    
+    /**
+     * @notice Get the total number of positions ever created
+     * @return The total count of positions created (next position ID - 1)
+     */
+    function getTotalPositionsCreated() external view returns (uint256) {
+        return _nextPositionId - 1;
     }
 } 

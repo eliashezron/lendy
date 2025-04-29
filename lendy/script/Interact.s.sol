@@ -445,13 +445,10 @@ contract InteractLendy is Script {
                 closePositionId = newId;
                 console.log("Created position to close, ID:", closePositionId);
                 
-                try positionManager.closePositionWithPermit(
-                    closePositionId,
-                    deadline,
-                    v,
-                    r,
-                    s
-                ) {
+                try positionManager.closePosition(
+                     closePositionId)
+            
+               {
                     console.log("Closed position with permit successfully");
                     
                     // Check position is closed
