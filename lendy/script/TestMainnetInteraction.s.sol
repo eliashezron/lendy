@@ -65,7 +65,7 @@ contract TestMainnetInteraction is Script {
         usdt = 0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e;
         
         // Test private key - ONLY FOR TESTING!
-        testPrivateKey = 0xPRIVATEKEY;
+        testPrivateKey = 0x0000000000000000000000000000000000000000000000000000000000000000;
         testUser = vm.addr(testPrivateKey);
         
         // Use position ID 5 which we've confirmed is active

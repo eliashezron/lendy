@@ -80,7 +80,7 @@ abstract contract MockPool is IPool {
         uint256 amount,
         uint256 interestRateMode,
         address onBehalfOf
-    ) external override returns (uint256) {
+    ) external virtual override returns (uint256) {
         uint256 actualRepay = amount > borrowBalances[asset] ? borrowBalances[asset] : amount;
         borrowBalances[asset] -= actualRepay;
         emit Repay(asset, amount, interestRateMode, onBehalfOf);
@@ -141,7 +141,7 @@ abstract contract MockPool is IPool {
         address user,
         uint256 debtToCover,
         bool receiveAToken
-    ) external override {
+    ) external virtual override {
         emit LiquidationCall(collateralAsset, debtAsset, user, debtToCover, receiveAToken);
     }
     
@@ -266,7 +266,7 @@ abstract contract MockPool is IPool {
         return 0;
     }
     
-    function setReserveData(address asset, DataTypes.ReserveData memory data) external {
+    function setReserveData(address asset, DataTypes.ReserveData memory data) external virtual {
         reserveData[asset] = data;
     }
     
@@ -369,7 +369,7 @@ abstract contract MockPool is IPool {
         emit Supply(asset, amount, onBehalfOf, referralCode);
     }
 
-    function setUserATokenBalance(address user, address asset, uint256 amount) external {
+    function setUserATokenBalance(address user, address asset, uint256 amount) external virtual {
         _userATokenBalances[user][asset] = amount;
     }
 

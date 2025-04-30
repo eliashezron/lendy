@@ -16,7 +16,7 @@ import {IPool} from "@aave-v3-core/contracts/interfaces/IPool.sol";
 contract TestWithHardcodedKey is Script {
     // IMPORTANT: This is a test private key with no real value
     // DO NOT USE THIS KEY FOR ANYTHING REAL
-    uint256 constant TEST_PRIVATE_KEY = 0xPRIVATEKEY;
+    uint256 constant TEST_PRIVATE_KEY = 0x0000000000000000000000000000000000000000000000000000000000000000;
     
     // Hardcoded addresses from deployment output
     address public constant POSITION_MANAGER = 0x1ab49E36A37Ac3aAf4a74dF72cC4Bea885a10D27;

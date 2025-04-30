@@ -9,8 +9,8 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 // Mock contracts for testing
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {MockERC20Permit} from "./mocks/MockERC20Permit.sol";
-import {MockPool} from "./mocks/MockPool.sol";
 import {MockPoolAddressesProvider} from "./mocks/MockPoolAddressesProvider.sol";
+import {ConcreteMockPool} from "./mocks/ConcreteMockPool.sol";
 
 contract LendyProtocolTest is Test {
     // Contracts
@@ -19,7 +19,7 @@ contract LendyProtocolTest is Test {
     MockERC20 public usdc;
     MockERC20 public weth;
     MockERC20Permit public dai; // Token that supports permit
-    MockPool public mockPool;
+    ConcreteMockPool public mockPool;
     MockPoolAddressesProvider public mockAddressesProvider;
 
     // Users
@@ -41,7 +41,7 @@ contract LendyProtocolTest is Test {
         dai = new MockERC20Permit("Dai Stablecoin", "DAI", 18);
         
         // Deploy mock Aave contracts
-        mockPool = new MockPool();
+        mockPool = new ConcreteMockPool();
         mockAddressesProvider = new MockPoolAddressesProvider();
         mockAddressesProvider.setPool(address(mockPool));
         

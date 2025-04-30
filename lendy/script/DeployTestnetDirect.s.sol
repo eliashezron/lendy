@@ -7,7 +7,7 @@ import {LendyPositionManager} from "../src/LendyPositionManager.sol";
 import {MockERC20} from "../test/mocks/MockERC20.sol";
 import {MockERC20Permit} from "../test/mocks/MockERC20Permit.sol";
 import {MockPoolAddressesProvider} from "../test/mocks/MockPoolAddressesProvider.sol";
-import {MockPool} from "../test/mocks/MockPool.sol";
+import {ConcreteMockPool} from "../test/mocks/ConcreteMockPool.sol";
 import {SaveDeploymentAddresses} from "./SaveDeploymentAddresses.s.sol";
 
 /**
@@ -54,7 +54,7 @@ contract DeployLendyDirect is Script {
         console.log("DAI deployed at:", dai);
 
         // Deploy mock Aave contracts
-        mockPool = address(new MockPool());
+        mockPool = address(new ConcreteMockPool());
         mockPoolAddressesProvider = address(new MockPoolAddressesProvider());
         MockPoolAddressesProvider(mockPoolAddressesProvider).setPool(mockPool);
 

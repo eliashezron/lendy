@@ -9,6 +9,7 @@ import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC2
 import {MockPool} from "../test/mocks/MockPool.sol";
 import {MockERC20} from "../test/mocks/MockERC20.sol";
 import {IPool} from "@aave-v3-core/contracts/interfaces/IPool.sol";
+import {ConcreteMockPool} from "../test/mocks/ConcreteMockPool.sol";
 
 /**
  * @title TestDirectInteraction
@@ -40,7 +41,7 @@ contract TestDirectInteraction is Script {
         dai = 0xc52Ae76CDA709bD3d5F1eEB20e2c71ab0C3dF65e;     // DAI
         
         // Hardcoded test private key - ONLY FOR TESTING!
-        testPrivateKey = "0xPRIVATEKEY";
+        testPrivateKey = 0x0000000000000000000000000000000000000000000000000000000000000000;
         testUser = vm.addr(testPrivateKey);
     }
     
@@ -306,7 +307,7 @@ contract TestDirectInteraction is Script {
         }
         
         // Deploy a new MockPool
-        address newMockPool = address(new MockPool());
+        address newMockPool = address(new ConcreteMockPool());
         console.log("New MockPool deployed at:", newMockPool);
         
         // Deploy a new LendyPositionManager that uses the MockPool
