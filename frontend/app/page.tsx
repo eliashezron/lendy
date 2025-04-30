@@ -42,7 +42,7 @@ export default function Home() {
       <div className="container mx-auto px-4 py-6 sm:py-8">
         <div className="text-center">
           <p className="mb-4 text-sm sm:text-base text-muted-foreground px-4">
-            Vesu is a fully open, transparent and secure crypto lending protocol built on Starknet.
+            Lendy is a fully open, transparent and secure crypto lending protocol built on Celo.
           </p>
           <div className="flex flex-wrap justify-center gap-3 sm:gap-4 text-sm sm:text-base">
             <Link href="#" className="text-blue-500 hover:text-blue-400">Help</Link>

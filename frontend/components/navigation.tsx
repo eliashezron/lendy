@@ -3,9 +3,10 @@
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { Wallet, Sun, Moon } from "lucide-react";
+import { Sun, Moon } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useEffect, useState } from "react";
+import { ConnectWallet } from "@/components/connect-wallet";
 
 export function Navigation() {
   const router = useRouter();
@@ -67,10 +68,7 @@ export function Navigation() {
             >
               {theme === 'dark' ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
             </button>
-            <button className="flex items-center gap-1 sm:gap-2 rounded-lg bg-primary px-3 sm:px-4 py-1.5 sm:py-2 text-sm sm:text-base text-primary-foreground hover:opacity-90">
-              <Wallet className="h-4 w-4 sm:h-5 sm:w-5" />
-              <span className="hidden xs:inline">Connect Wallet</span>
-            </button>
+            <ConnectWallet />
           </div>
         </div>
       </div>
