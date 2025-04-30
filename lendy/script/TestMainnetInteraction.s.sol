@@ -64,8 +64,23 @@ contract TestMainnetInteraction is Script {
         usdc = 0xcebA9300f2b948710d2653dD7B07f33A8B32118C;
         usdt = 0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e;
         
-        // Test private key - ONLY FOR TESTING!
-        testPrivateKey = 0x0000000000000000000000000000000000000000000000000000000000000000;
+        // Get private key from environment variable
+        try vm.envUint("CELO_MAINNET_PRIVATE_KEY") returns (uint256 pk) {
+            testPrivateKey = pk;
+        } catch {
+            // Try to read as a hex string with 0x prefix
+            string memory pkString = vm.envString("CELO_MAINNET_PRIVATE_KEY");
+            if (bytes(pkString).length > 0 && bytes(pkString)[0] == "0" && bytes(pkString)[1] == "x") {
+                testPrivateKey = vm.parseUint(pkString);
+            } else if (bytes(pkString).length > 0) {
+                // If no 0x prefix, try adding it
+                testPrivateKey = vm.parseUint(string(abi.encodePacked("0x", pkString)));
+            } else {
+                // Fallback to a default key for testing ONLY, but this should never be used in production
+                console.log("[WARNING] No CELO_MAINNET_PRIVATE_KEY found in .env file. Using a dummy key that should NOT be used with real funds.");
+                testPrivateKey = 0x0000000000000000000000000000000000000000000000000000000000000001;
+            }
+        }
         testUser = vm.addr(testPrivateKey);
         
         // Use position ID 5 which we've confirmed is active
@@ -76,6 +91,13 @@ contract TestMainnetInteraction is Script {
         console.log("\n==================================================================");
         console.log("LENDY POSITION MANAGER - MAINNET INTERACTION TEST SCRIPT");
         console.log("==================================================================\n");
+
+        // Check if we're using the default private key
+        if (testPrivateKey == 0x0000000000000000000000000000000000000000000000000000000000000001) {
+            console.log("\n[WARNING] Using default private key - NOT SECURE FOR PRODUCTION");
+            console.log("Please set CELO_MAINNET_PRIVATE_KEY in your .env file");
+            console.log("Continuing with test private key for demo purposes only\n");
+        }
 
         console.log("Running mainnet test interaction with function:", testFunction);
         console.log("Contract Addresses:");
