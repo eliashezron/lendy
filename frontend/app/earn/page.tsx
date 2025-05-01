@@ -3,7 +3,7 @@
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useState, useEffect, ChangeEvent, useMemo } from "react";
-import { Info, ChevronDown, ChevronUp, Plus, Loader2, CheckCircle, AlertCircle } from "lucide-react";
+import { Info, ChevronDown, ChevronUp, Plus, Loader2, CheckCircle, AlertCircle, ExternalLink, ArrowRight } from "lucide-react";
 import { 
   Select,
   SelectContent,
@@ -34,6 +34,15 @@ export default function Earn() {
   const { isConnected } = useAccount();
   const router = useRouter();
   const { createPosition, isLoading, isSuccess, error, txHash } = useCreatePosition();
+  
+  // Reset form after successful transaction
+  useEffect(() => {
+    if (isSuccess) {
+      // If you want to automatically reset the form after success
+      // setAmount("0.00");
+      // setSelectedPercentage(null);
+    }
+  }, [isSuccess]);
 
   // Get current APY based on selected token
   const currentApy = useMemo(() => {
@@ -85,6 +94,10 @@ export default function Earn() {
   const navigateToBorrow = () => {
     router.push('/borrow');
   };
+  
+  const navigateToPositions = () => {
+    router.push('/positions');
+  };
 
   // Determine if amount exceeds balance
   const isAmountValid = () => {
@@ -102,6 +115,7 @@ export default function Earn() {
     if (!selectedToken || !isAmountValid() || !isConnected) return;
     
     try {
+      console.log(`Starting position creation process for ${amount} ${selectedToken} with decimals ${decimals}`);
       await createPosition(selectedToken, amount, decimals);
     } catch (err) {
       console.error("Failed to create position:", err);
@@ -110,6 +124,8 @@ export default function Earn() {
 
   // Render transaction status alert
   const renderTransactionStatus = () => {
+    console.log("Transaction status:", { isLoading, isSuccess, error, txHash });
+    
     if (isLoading) {
       return (
         <Alert variant="default" className="mb-4 animate-pulse">
@@ -122,23 +138,35 @@ export default function Earn() {
       );
     }
     
-    if (isSuccess) {
+    if (isSuccess || txHash) {
       return (
         <Alert variant="success" className="mb-4">
           <CheckCircle className="h-4 w-4 mr-2" />
           <AlertTitle>Position created!</AlertTitle>
           <AlertDescription>
             Your deposit has been successfully added to Aave Celo Markets.
-            {txHash && (
-              <a 
-                href={`https://celoscan.io/tx/${txHash}`} 
-                target="_blank" 
-                rel="noopener noreferrer"
-                className="block mt-2 underline"
+            <div className="mt-4 flex flex-col space-y-2">
+              {txHash && (
+                <a 
+                  href={`https://celoscan.io/tx/${txHash}`} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="flex items-center text-green-600 hover:text-green-700"
+                >
+                  <ExternalLink className="h-4 w-4 mr-2" />
+                  View transaction
+                </a>
+              )}
+              <Button 
+                variant="outline" 
+                size="sm" 
+                className="mt-2 flex items-center border-green-500 text-green-600 hover:text-green-700"
+                onClick={navigateToPositions}
               >
-                View transaction
-              </a>
-            )}
+                View your positions
+                <ArrowRight className="h-4 w-4 ml-2" />
+              </Button>
+            </div>
           </AlertDescription>
         </Alert>
       );
@@ -178,8 +206,12 @@ export default function Earn() {
                     onChange={handleAmountChange}
                     className="text-3xl font-semibold border-none bg-transparent p-0 h-auto text-left w-[60%] focus-visible:ring-0 focus-visible:ring-offset-0"
                     placeholder="0.00"
+                    disabled={isLoading || isSuccess}
                   />
-                  <Select onValueChange={(value) => setSelectedToken(value)}>
+                  <Select 
+                    onValueChange={(value) => setSelectedToken(value)}
+                    disabled={isLoading || isSuccess}
+                  >
                     <SelectTrigger className="w-[180px] border-none bg-transparent">
                       <SelectValue placeholder="Choose Token" />
                     </SelectTrigger>
@@ -205,7 +237,7 @@ export default function Earn() {
                   variant={selectedPercentage === "25%" ? "default" : "outline"}
                   className="rounded-lg" 
                   onClick={() => handlePercentageSelect("25%")}
-                  disabled={!isConnected || !selectedToken || balance === "0.00" || isLoading}
+                  disabled={!isConnected || !selectedToken || balance === "0.00" || isLoading || isSuccess}
                 >
                   25%
                 </Button>
@@ -213,7 +245,7 @@ export default function Earn() {
                   variant={selectedPercentage === "50%" ? "default" : "outline"}
                   className="rounded-lg" 
                   onClick={() => handlePercentageSelect("50%")}
-                  disabled={!isConnected || !selectedToken || balance === "0.00" || isLoading}
+                  disabled={!isConnected || !selectedToken || balance === "0.00" || isLoading || isSuccess}
                 >
                   50%
                 </Button>
@@ -221,7 +253,7 @@ export default function Earn() {
                   variant={selectedPercentage === "75%" ? "default" : "outline"}
                   className="rounded-lg" 
                   onClick={() => handlePercentageSelect("75%")}
-                  disabled={!isConnected || !selectedToken || balance === "0.00" || isLoading}
+                  disabled={!isConnected || !selectedToken || balance === "0.00" || isLoading || isSuccess}
                 >
                   75%
                 </Button>
@@ -229,7 +261,7 @@ export default function Earn() {
                   variant={selectedPercentage === "100%" ? "default" : "outline"}
                   className="rounded-lg" 
                   onClick={() => handlePercentageSelect("100%")}
-                  disabled={!isConnected || !selectedToken || balance === "0.00" || isLoading}
+                  disabled={!isConnected || !selectedToken || balance === "0.00" || isLoading || isSuccess}
                 >
                   100%
                 </Button>
@@ -316,20 +348,30 @@ export default function Earn() {
                 </div>
               )}
               
-              <Button 
-                className="w-full bg-primary hover:bg-primary/90 text-primary-foreground py-6 text-lg"
-                disabled={!isConnected || !selectedToken || !isAmountValid() || isLoading}
-                onClick={handleCreatePosition}
-              >
-                {isLoading ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Creating Position...
-                  </>
-                ) : (
-                  "Start earning"
-                )}
+              {isSuccess ? (
+                <Button
+                  className="w-full bg-green-600 hover:bg-green-700 text-white py-6 text-lg"
+                  onClick={navigateToPositions}
+                >
+                  <ArrowRight className="h-5 w-5 mr-2" />
+                  View Your Positions
+                </Button>
+              ) : (
+                <Button 
+                  className="w-full bg-primary hover:bg-primary/90 text-primary-foreground py-6 text-lg"
+                  disabled={!isConnected || !selectedToken || !isAmountValid() || isLoading || isSuccess}
+                  onClick={handleCreatePosition}
+                >
+                  {isLoading ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Creating Position...
+                    </>
+                  ) : (
+                    "Start earning"
+                  )}
               </Button>
+              )}
             </Card>
           </div>
         </div>
