@@ -3,6 +3,8 @@ import { parseUnits } from 'viem';
 // Contract addresses
 export const CONTRACT_ADDRESSES = {
   lendyPositionManager: '0xd2B508298fCC37261953684744ec4CCc734d5083' as `0x${string}`,
+  usdc: '0xcebA9300f2b948710d2653dD7B07f33A8B32118C' as `0x${string}`,
+  usdt: '0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e' as `0x${string}`,
 };
 
 // ERC20 ABI for token approval

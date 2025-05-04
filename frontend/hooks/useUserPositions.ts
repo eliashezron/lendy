@@ -16,6 +16,9 @@ export type Position = {
   positionId?: number;
   formattedCollateralAmount?: string;
   formattedBorrowAmount?: string;
+  collateralAssetSymbol?: string;
+  borrowAssetSymbol?: string;
+  // Legacy field for backward compatibility
   assetSymbol?: string;
 };
 
@@ -53,8 +56,8 @@ export function useUserPositions() {
   
   // Token address to symbol mapping
   const tokenAddressToSymbol: Record<string, string> = {
-    '0xcebA9300f2b948710d2653dD7B07f33A8B32118C': 'USDC',
-    '0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e': 'USDT',
+    '0xceba9300f2b948710d2653dd7b07f33a8b32118c': 'USDC',
+    '0x48065fbbe25f71c9282ddf5e1cd6d6a887483d5e': 'USDT',
   };
   
   // Process positions data
@@ -66,8 +69,9 @@ export function useUserPositions() {
         
         // Combine IDs with details
         const processedPositions = details.map((position, index) => {
-          // Get asset symbol from the address
-          const assetSymbol = tokenAddressToSymbol[position.collateralAsset.toLowerCase() as string] || 'Unknown';
+          // Get asset symbols from the addresses - make sure to lowercase for comparison
+          const collateralAssetSymbol = tokenAddressToSymbol[position.collateralAsset.toLowerCase()] || 'Unknown';
+          const borrowAssetSymbol = tokenAddressToSymbol[position.borrowAsset.toLowerCase()] || 'Unknown';
           
           // Format amounts to readable strings
           const formattedCollateralAmount = formatUnits(position.collateralAmount, 6); // Assuming 6 decimals for stablecoins
@@ -76,7 +80,9 @@ export function useUserPositions() {
           return {
             ...position,
             positionId: Number(ids[index]),
-            assetSymbol,
+            collateralAssetSymbol,
+            borrowAssetSymbol,
+            assetSymbol: collateralAssetSymbol, // Legacy support
             formattedCollateralAmount,
             formattedBorrowAmount,
           };

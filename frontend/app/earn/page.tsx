@@ -16,7 +16,7 @@ import { useTokenBalance } from "@/hooks/useTokenBalance";
 import { useAccount } from "wagmi";
 import { useRouter } from "next/navigation";
 import { Input } from "@/components/ui/input"; 
-import { useCreatePosition } from "@/hooks/useCreatePosition";
+import { useCreatePosition, PositionMode } from "@/hooks/useCreatePosition";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 
 // Supply APY rates from Aave
@@ -107,7 +107,28 @@ export default function Earn() {
     const numericAmount = parseFloat(amount);
     const numericBalance = parseFloat(balance);
     
-    return numericAmount > 0 && numericAmount <= numericBalance;
+    // Check if amount is at least 0.1 tokens (minimum required)
+    const MIN_AMOUNT = 0.1;
+    
+    return numericAmount >= MIN_AMOUNT && numericAmount <= numericBalance;
+  };
+
+  // Get the error message for invalid amount
+  const getAmountErrorMessage = () => {
+    if (!selectedToken || amount === "0.00") return null;
+    
+    const numericAmount = parseFloat(amount);
+    const numericBalance = parseFloat(balance || "0");
+    
+    if (numericAmount < 0.1) {
+      return `Minimum deposit is 0.1 ${selectedToken.toUpperCase()}`;
+    }
+    
+    if (numericAmount > numericBalance) {
+      return "Amount exceeds balance";
+    }
+    
+    return null;
   };
 
   // Handle position creation
@@ -116,7 +137,7 @@ export default function Earn() {
     
     try {
       console.log(`Starting position creation process for ${amount} ${selectedToken} with decimals ${decimals}`);
-      await createPosition(selectedToken, amount, decimals);
+      await createPosition(selectedToken, amount, decimals, PositionMode.EARN_ONLY);
     } catch (err) {
       console.error("Failed to create position:", err);
     }
@@ -226,8 +247,8 @@ export default function Earn() {
                 ) : (
                   <p className="text-muted-foreground">select token</p>
                 )}
-                {isConnected && selectedToken && parseFloat(amount) > parseFloat(balance) && (
-                  <p className="text-red-500 text-sm mt-1">Amount exceeds balance</p>
+                {getAmountErrorMessage() && (
+                  <p className="text-red-500 text-sm mt-1">{getAmountErrorMessage()}</p>
                 )}
               </div>
               
@@ -319,6 +340,12 @@ export default function Earn() {
                       </p>
                     </div>
                   </div>
+                  
+                  <div className="rounded-lg bg-blue-50 dark:bg-blue-950 p-3 mb-3 text-xs text-blue-600 dark:text-blue-400">
+                    <p className="font-medium mb-1">Supply-Only Position:</p>
+                    <p>Your deposit will be supplied to Aave on Celo, allowing you to earn interest on your assets.</p>
+                    <p className="mt-1">You'll be able to withdraw your funds at any time from the Positions page.</p>
+                  </div>
                 </Card>
               </div>
               
@@ -341,9 +368,13 @@ export default function Earn() {
                     <span>Supplied asset</span>
                     <span>0 → {amount} {selectedToken?.toUpperCase() || ''}</span>
                   </div>
-                  <div className="flex justify-between text-muted-foreground">
+                  <div className="flex justify-between text-muted-foreground mb-2">
                     <span>Supply APY</span>
                     <span>{currentApy !== null ? `${currentApy}%` : 'N/A'}</span>
+                  </div>
+                  <div className="flex justify-between text-muted-foreground">
+                    <span>Position type</span>
+                    <span>Supply only (no borrowing)</span>
                   </div>
                 </div>
               )}

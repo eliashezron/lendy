@@ -9,6 +9,7 @@ export default function Home() {
   const options = [
     { value: "earn", label: "Earn" },
     { value: "borrow", label: "Borrow" },
+    { value: "positions", label: "Positions" },
   ];
   const [selected, setSelected] = useState("earn");
 

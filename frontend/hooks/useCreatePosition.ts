@@ -3,6 +3,19 @@ import { useWriteContract, useReadContract, useWaitForTransactionReceipt, useAcc
 import { tokenAddresses } from './useTokenBalance';
 import { CONTRACT_ADDRESSES, LENDY_POSITION_MANAGER_ABI, prepareTokenAmount, ERC20_ABI } from '@/lib/contracts';
 
+// Position creation modes
+export enum PositionMode {
+  EARN_ONLY = 'earn_only',   // Only supply, no borrowing
+  BORROW = 'borrow'          // Supply and borrow
+}
+
+// Parameters for creating a borrow position
+export interface BorrowParams {
+  borrowAsset: string;         // Token symbol to borrow
+  borrowAmount: string;        // Amount to borrow as string
+  borrowDecimals: number;      // Decimals of the borrow asset
+}
+
 export function useCreatePosition() {
   const [isLoading, setIsLoading] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
@@ -53,7 +66,13 @@ export function useCreatePosition() {
     });
   };
   
-  const createPosition = async (tokenSymbol: string, amount: string, decimals: number) => {
+  const createPosition = async (
+    tokenSymbol: string, 
+    amount: string, 
+    decimals: number,
+    mode: PositionMode = PositionMode.EARN_ONLY,
+    borrowParams?: BorrowParams
+  ) => {
     if (!isConnected) {
       throw new Error('Wallet not connected');
     }
@@ -72,6 +91,12 @@ export function useCreatePosition() {
       // Convert amount to token units with decimals
       const tokenAmount = prepareTokenAmount(amount, decimals);
       
+      // Check if amount is too small (minimum 0.1 token for stable coins)
+      const minAmount = BigInt(100000); // 0.1 with 6 decimals
+      if (tokenAmount < minAmount) {
+        throw new Error(`Amount is too small. Minimum deposit is 0.1 ${tokenSymbol.toUpperCase()}`);
+      }
+      
       console.log('Starting position creation flow with token:', tokenAddress, 'amount:', tokenAmount.toString());
       
       // First request token approval
@@ -79,8 +104,9 @@ export function useCreatePosition() {
         console.log('Requesting token approval first');
         await approveToken(tokenAddress as `0x${string}`, tokenAmount);
         
-        // Wait briefly for approval to propagate
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        // Wait longer for approval to propagate on Celo network
+        console.log('Waiting for approval confirmation...');
+        await new Promise(resolve => setTimeout(resolve, 5000));
         
         console.log('Proceeding to create position');
         
@@ -91,10 +117,41 @@ export function useCreatePosition() {
         // 4. borrowAmount (uint256)
         // 5. interestRateMode (uint256) - 1 for stable, 2 for variable
         
-        // For this simplified version, we're only depositing (no borrowing)
-        // so we'll set borrowAmount to 0 and use a default borrowAsset (can be the same token)
-        const zeroAmount = BigInt(0);
+        let borrowAssetAddress: `0x${string}`;
+        let borrowAmountInWei: bigint;
+        
+        if (mode === PositionMode.BORROW && borrowParams) {
+          // User is borrowing - use provided parameters
+          const borrowTokenAddress = tokenAddresses[borrowParams.borrowAsset.toLowerCase() as keyof typeof tokenAddresses];
+          if (!borrowTokenAddress) {
+            throw new Error(`Borrow token ${borrowParams.borrowAsset} not supported`);
+          }
+          
+          borrowAssetAddress = borrowTokenAddress as `0x${string}`;
+          borrowAmountInWei = prepareTokenAmount(borrowParams.borrowAmount, borrowParams.borrowDecimals);
+          
+          // Ensure borrow amount is not zero
+          if (borrowAmountInWei === BigInt(0)) {
+            throw new Error('Borrow amount must be greater than 0');
+          }
+        } else {
+          // For earn-only mode, we need to use the smallest possible valid borrow amount
+          // The contract requires borrow amount > 0, so we use 1 wei of a different asset
+          borrowAssetAddress = tokenSymbol.toLowerCase() === 'usdc' 
+            ? CONTRACT_ADDRESSES.usdt  // If collateral is USDC, borrow USDT
+            : CONTRACT_ADDRESSES.usdc; // If collateral is USDT, borrow USDC
+            
+          borrowAmountInWei = BigInt(1); // Minimum possible amount (1 wei)
+        }
+        
         const variableInterestRate = BigInt(2); // Using variable rate (2)
+        
+        console.log('Creating position with parameters:');
+        console.log('- Collateral asset:', tokenAddress);
+        console.log('- Collateral amount:', tokenAmount.toString());
+        console.log('- Borrow asset:', borrowAssetAddress);
+        console.log('- Borrow amount:', borrowAmountInWei.toString());
+        console.log('- Interest rate mode:', variableInterestRate.toString());
         
         // Write to contract to create position with all 5 required arguments
         writeContract({
@@ -102,11 +159,11 @@ export function useCreatePosition() {
           abi: LENDY_POSITION_MANAGER_ABI,
           functionName: 'createPosition',
           args: [
-            tokenAddress as `0x${string}`, // collateralAsset
-            tokenAmount,                   // collateralAmount
-            tokenAddress as `0x${string}`, // borrowAsset (same as collateral in this case)
-            zeroAmount,                    // borrowAmount (0 for deposit only)
-            variableInterestRate           // interestRateMode (2 for variable)
+            tokenAddress as `0x${string}`,  // collateralAsset
+            tokenAmount,                    // collateralAmount
+            borrowAssetAddress,             // borrowAsset
+            borrowAmountInWei,              // borrowAmount
+            variableInterestRate            // interestRateMode (2 for variable)
           ],
         }, {
           onSuccess(hash: `0x${string}`) {
@@ -117,7 +174,16 @@ export function useCreatePosition() {
           },
           onError(err: Error) {
             console.error('Error creating position:', err);
-            setError(err);
+            
+            // Provide more user-friendly error message
+            let errorMessage = err.message;
+            if (errorMessage.includes('user rejected transaction')) {
+              errorMessage = 'Transaction was rejected by user.';
+            } else if (errorMessage.includes('Internal JSON-RPC error')) {
+              errorMessage = 'The lending protocol rejected this transaction. Try using a larger deposit amount or check that you have enough CELO for gas fees.';
+            }
+            
+            setError(new Error(errorMessage));
             setIsLoading(false);
           },
         });
