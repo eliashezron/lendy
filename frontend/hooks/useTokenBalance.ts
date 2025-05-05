@@ -37,7 +37,7 @@ export function useTokenBalance(tokenSymbol: string | null) {
 
   // Check if user is using MiniPay
   useEffect(() => {
-    if (window.ethereum?.isMiniPay) {
+    if (typeof window !== 'undefined' && window.ethereum?.isMiniPay) {
       setIsMiniPay(true);
     }
   }, []);
