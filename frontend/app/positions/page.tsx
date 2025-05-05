@@ -5,8 +5,9 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Info, Loader2, ExternalLink, Plus, CheckCircle, AlertCircle, ArrowRight } from "lucide-react";
-import { useUserPositions } from "@/hooks/useUserPositions";
-import { useAccount } from "wagmi";
+import { useUserPositions, Position } from '@/hooks/useUserPositions';
+import { useUserSupplyPositions, SupplyPosition } from '@/hooks/useUserSupplyPositions';
+import { useAccount, usePublicClient } from "wagmi";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -19,14 +20,32 @@ import { useTokenBalance } from "@/hooks/useTokenBalance";
 import { useWithdrawCollateral } from "@/hooks/useWithdrawCollateral";
 import { useRouter } from "next/navigation";
 import { useEmergencyClose } from "@/hooks/useEmergencyClose";
+import { useSupplyPosition } from "@/hooks/useSupplyPosition";
+import { CONTRACT_ADDRESSES, LENDY_POSITION_MANAGER_ABI } from "@/lib/contracts";
 
 // Debug flag - set to true to show extra debugging information in the UI
 const __DEV__ = process.env.NODE_ENV === 'development';
 
+// Supply APY rates from Aave
+const SUPPLY_APY_RATES = {
+  usdc: 1.2, // 1.2%
+  usdt: 1.0, // 1.0%
+};
+
 export default function Positions() {
   const { isConnected, address } = useAccount();
+  const publicClient = usePublicClient();
   const router = useRouter();
-  const { positions, isLoading, error, totalSupplied, totalCollateral, totalBorrowed } = useUserPositions();
+  
+  // Add a refresh trigger state
+  const [refreshTrigger, setRefreshTrigger] = useState<number>(0);
+  
+  // Get borrow positions with refresh trigger
+  const { positions, isLoading: isPositionsLoading, error: positionsError, totalCollateral, totalBorrowed, refetch: refetchPositions } = useUserPositions(refreshTrigger);
+  
+  // Get supply positions with refresh trigger
+  const { supplyPositions, isLoading: isSupplyPositionsLoading, error: supplyPositionsError, totalSupplied, refetch: refetchSupplyPositions } = useUserSupplyPositions(refreshTrigger);
+  
   const [currentTab, setCurrentTab] = useState<string>("earning");
   
   // Dialog states
@@ -70,22 +89,32 @@ export default function Positions() {
   const { repayDebt, isLoading: isRepaying, isSuccess: isRepaySuccess, isApprovalStepComplete, error: repayError, txHash: repayTxHash } = useRepayDebt();
   const { withdrawCollateral, isLoading: isWithdrawing, isSuccess: isWithdrawSuccess, error: withdrawError, txHash: withdrawTxHash } = useWithdrawCollateral();
   const { emergencyClosePosition, isLoading: isEmergencyClosing, isSuccess: isEmergencySuccess, error: emergencyError, txHash: emergencyTxHash } = useEmergencyClose();
+  
+  // Add supply position hooks
+  const { 
+    increaseSupply, 
+    withdrawSupply, 
+    isLoading: isSupplyModifying, 
+    isSuccess: isSupplyModified, 
+    error: supplyModifyError, 
+    txHash: supplyModifyTxHash 
+  } = useSupplyPosition();
 
-  // Filter positions based on the current tab
+  // Filter positions based on the current tab - changed to show all positions
   const filteredPositions = positions.filter(position => {
-    if (currentTab === "earning") {
-      // Only include positions with no borrow amount AND non-zero collateral
-      return position.borrowAmount === BigInt(0) && position.collateralAmount > BigInt(0);
-    }
+    // Show all positions regardless of borrow amount
     if (currentTab === "borrowing") {
-      // Only borrow positions
-      return position.borrowAmount > BigInt(0);
+      // Include all positions that have any collateral
+      return position.collateralAmount > BigInt(0);
     }
     return false;
   });
 
   const handleTabChange = (value: string) => {
     setCurrentTab(value);
+    console.log(`Switched to tab: ${value}`);
+    console.log(`Positions available: ${positions.length}`);
+    console.log(`Supply positions available: ${supplyPositions.length}`);
   };
 
   const renderCurrency = (amount: string) => {
@@ -153,29 +182,35 @@ export default function Positions() {
     setWithdrawDialogOpen(true);
   };
   
-  // Handle adding collateral
+  // Handler for adding collateral (for borrowing positions)
   const handleAddCollateral = async () => {
-    if (!selectedPosition || !additionalAmount || parseFloat(additionalAmount) <= 0) return;
+    if (!selectedPosition || !additionalAmount) return;
     
     try {
       await addCollateral(
-        selectedPosition.positionId, 
+        selectedPosition.positionId,
         additionalAmount,
         selectedPosition.collateralAssetSymbol || selectedPosition.assetSymbol
       );
     } catch (err) {
-      console.error("Failed to add collateral:", err);
+      console.error("Error adding collateral:", err);
     }
   };
   
   // Handle closing position
   const handleClosePosition = async () => {
-    if (!selectedPosition) return;
+    if (!selectedPosition?.positionId) return;
     
     try {
+      console.log(`Closing position ${selectedPosition.positionId}`);
       await closePosition(selectedPosition.positionId);
+      
+      // Trigger refresh after successful close
+      setTimeout(() => {
+        setRefreshTrigger(prev => prev + 1);
+      }, 2000); // Wait for blockchain to process
     } catch (err) {
-      console.error("Failed to close position:", err);
+      console.error("Error closing position:", err);
     }
   };
   
@@ -266,15 +301,65 @@ export default function Positions() {
     }
   };
   
+  // Handle adding supply
+  const handleIncreaseSupply = async () => {
+    if (!selectedPosition?.supplyPositionId || !additionalAmount) return;
+    
+    try {
+      const decimals = selectedPosition.assetSymbol === 'USDC' || selectedPosition.assetSymbol === 'USDT' ? 6 : 18;
+      
+      console.log(`Increasing supply for position ${selectedPosition.supplyPositionId} with ${additionalAmount} ${selectedPosition.assetSymbol}`);
+      
+      await increaseSupply(
+        selectedPosition.supplyPositionId,
+        selectedPosition.assetSymbol.toLowerCase(),
+        additionalAmount,
+        decimals
+      );
+    } catch (err) {
+      console.error("Error increasing supply:", err);
+    }
+  };
+  
+  // Handle closing supply position
+  const handleCloseSupplyPosition = async () => {
+    if (!selectedPosition?.supplyPositionId) return;
+    
+    try {
+      console.log(`Closing supply position ${selectedPosition.supplyPositionId}`);
+      
+      // Call withdrawSupply with full withdrawal flag
+      const decimals = selectedPosition.assetSymbol === 'USDC' || selectedPosition.assetSymbol === 'USDT' ? 6 : 18;
+      await withdrawSupply(
+        selectedPosition.supplyPositionId,
+        "0", // Amount doesn't matter for full withdrawal
+        decimals,
+        true // isFullWithdrawal = true
+      );
+      
+      // Trigger refresh after successful close
+      setTimeout(() => {
+        setRefreshTrigger(prev => prev + 1);
+      }, 2000); // Wait for blockchain to process
+    } catch (err) {
+      console.error("Error closing supply position:", err);
+    }
+  };
+  
   // Effect to reset dialogs after successful transactions and redirect on repayment
   useEffect(() => {
-    if (isAddSuccess || isCloseSuccess || isWithdrawSuccess) {
+    if (isAddSuccess || isCloseSuccess || isWithdrawSuccess || isSupplyModified) {
       setModifyDialogOpen(false);
       setCloseDialogOpen(false);
       setWithdrawDialogOpen(false);
       setSelectedPosition(null);
       setAdditionalAmount("");
       setWithdrawAmount("");
+      
+      // Trigger refresh after successful transaction
+      setTimeout(() => {
+        setRefreshTrigger(prev => prev + 1);
+      }, 2000); // Wait for blockchain to process
     }
     
     // For successful repayments, redirect to the Earning tab
@@ -285,12 +370,17 @@ export default function Positions() {
       setHadFailedRepayment(false); // Reset on success
       setCurrentTab("earning");
       
+      // Trigger refresh after successful repayment
+      setTimeout(() => {
+        setRefreshTrigger(prev => prev + 1);
+      }, 2000); // Wait for blockchain to process
+      
       // Give a small delay before redirecting to ensure state is properly updated
       setTimeout(() => {
         router.push("/positions");
       }, 500);
     }
-  }, [isAddSuccess, isCloseSuccess, isRepaySuccess, isWithdrawSuccess, isEmergencySuccess, router]);
+  }, [isAddSuccess, isCloseSuccess, isRepaySuccess, isWithdrawSuccess, isEmergencySuccess, isSupplyModified, router]);
 
   // Render transaction status with step tracking for repayment
   const renderRepaymentStatus = (isLoading: boolean, isSuccess: boolean, isApprovalStepComplete: boolean, error: Error | null, txHash: string | undefined) => {
@@ -406,6 +496,157 @@ export default function Positions() {
     return null;
   };
 
+  // Add manual test function for direct contract interaction
+  const testContractDirectly = async () => {
+    if (!address || !publicClient) {
+      console.error("Not connected");
+      return;
+    }
+    
+    console.log("=== DIRECT CONTRACT TEST ===");
+    console.log("Connected address:", address);
+    console.log("Contract address:", CONTRACT_ADDRESSES.lendyPositionManager);
+    
+    try {
+      // Test getUserPositions
+      console.log("Testing getUserPositions...");
+      const positionIds = await publicClient.readContract({
+        address: CONTRACT_ADDRESSES.lendyPositionManager,
+        abi: LENDY_POSITION_MANAGER_ABI,
+        functionName: 'getUserPositions',
+        args: [address],
+      }) as bigint[];
+      console.log("Position IDs directly from contract:", positionIds);
+      
+      // Test getUserSupplyPositions
+      console.log("Testing getUserSupplyPositions...");
+      const supplyPositionIds = await publicClient.readContract({
+        address: CONTRACT_ADDRESSES.lendyPositionManager,
+        abi: LENDY_POSITION_MANAGER_ABI,
+        functionName: 'getUserSupplyPositions',
+        args: [address],
+      }) as bigint[];
+      console.log("Supply Position IDs directly from contract:", supplyPositionIds);
+      
+      // Check each supply position individually
+      if (supplyPositionIds.length > 0) {
+        console.log("DETAILED SUPPLY POSITION CHECK:");
+        for (const id of supplyPositionIds) {
+          try {
+            console.log(`Checking supply position ${id}...`);
+            const supplyData = await publicClient.readContract({
+              address: CONTRACT_ADDRESSES.lendyPositionManager,
+              abi: LENDY_POSITION_MANAGER_ABI,
+              functionName: 'getSupplyPositionDetails',
+              args: [id],
+            });
+            console.log(`Raw supply position ${id} data:`, supplyData);
+            
+            // Try direct reading from storage
+            const directSupplyData = await publicClient.readContract({
+              address: CONTRACT_ADDRESSES.lendyPositionManager,
+              abi: LENDY_POSITION_MANAGER_ABI,
+              functionName: 'supplyPositions',
+              args: [id],
+            });
+            console.log(`Direct storage supply position ${id} data:`, directSupplyData);
+          } catch (err) {
+            console.error(`Error checking supply position ${id}:`, err);
+          }
+        }
+      }
+      
+      // Get total counts from contract
+      console.log("Testing totalActivePositions...");
+      const totalActivePos = await publicClient.readContract({
+        address: CONTRACT_ADDRESSES.lendyPositionManager,
+        abi: LENDY_POSITION_MANAGER_ABI,
+        functionName: 'totalActivePositions',
+      }) as bigint;
+      console.log("Total active positions from contract:", totalActivePos.toString());
+      
+      console.log("Testing totalActiveSupplyPositions...");
+      const totalActiveSupplyPos = await publicClient.readContract({
+        address: CONTRACT_ADDRESSES.lendyPositionManager,
+        abi: LENDY_POSITION_MANAGER_ABI,
+        functionName: 'totalActiveSupplyPositions',
+      }) as bigint;
+      console.log("Total active supply positions from contract:", totalActiveSupplyPos.toString());
+      
+    } catch (err) {
+      console.error("Error in direct contract test:", err);
+    }
+  };
+
+  // Handle supply position management
+  const handleSupplyClick = (position: SupplyPosition) => {
+    setSelectedPosition(position);
+    setAdditionalAmount("");
+    setModifyDialogOpen(true);
+  };
+
+  const handleWithdrawSupplyClick = (position: SupplyPosition) => {
+    setSelectedPosition(position);
+    setWithdrawAmount("");
+    setWithdrawType("partial");
+    setWithdrawDialogOpen(true);
+  };
+
+  // Calculate monthly yield for a supply position
+  const calculateMonthlyYield = (position: SupplyPosition) => {
+    if (!position.assetSymbol || !position.formattedAmount) return "0.00";
+    
+    const tokenKey = position.assetSymbol.toLowerCase() as keyof typeof SUPPLY_APY_RATES;
+    const apy = SUPPLY_APY_RATES[tokenKey] || 0;
+    const principal = parseFloat(position.formattedAmount);
+    
+    // Monthly yield = principal * (APY / 12)
+    const monthly = principal * (apy / 100 / 12);
+    return monthly.toFixed(6);
+  };
+
+  // Get APY for a supply position
+  const getSupplyAPY = (symbol: string | undefined) => {
+    if (!symbol) return "0%";
+    const tokenKey = symbol.toLowerCase() as keyof typeof SUPPLY_APY_RATES;
+    return `${SUPPLY_APY_RATES[tokenKey] || 0}%`;
+  };
+
+  // Handle opening the close dialog for supply positions
+  const handleCloseSupplyClick = (position: SupplyPosition) => {
+    setSelectedPosition(position);
+    setCloseDialogOpen(true);
+  };
+
+  // Handle withdraw supply
+  const handleWithdrawSupply = async () => {
+    if (!selectedPosition?.supplyPositionId) return;
+    
+    try {
+      // Get token decimals - assuming 6 for stablecoins if not available
+      const decimals = selectedPosition.assetSymbol === "USDC" || selectedPosition.assetSymbol === "USDT" ? 6 : 18;
+      
+      await withdrawSupply(
+        selectedPosition.supplyPositionId,
+        withdrawAmount,
+        decimals,
+        withdrawType === "full"
+      );
+      
+      // Close dialog after successful transaction
+      if (isSupplyModified) {
+        setWithdrawDialogOpen(false);
+        
+        // Trigger refresh after successful withdrawal
+        setTimeout(() => {
+          setRefreshTrigger(prev => prev + 1);
+        }, 2000); // Wait for blockchain to process
+      }
+    } catch (err) {
+      console.error("Error withdrawing supply:", err);
+    }
+  };
+
   return (
     <main className="min-h-screen bg-background text-foreground flex flex-col justify-between">
       <div className="container mx-auto px-4 py-8 flex-1 flex flex-col items-center">
@@ -442,7 +683,7 @@ export default function Positions() {
             </TabsList>
             
             {/* Loading State */}
-            {isLoading && (
+            {(isPositionsLoading || isSupplyPositionsLoading) && (
               <div className="flex items-center justify-center p-10">
                 <Loader2 className="h-8 w-8 animate-spin text-primary" />
                 <span className="ml-2 text-muted-foreground">Loading positions...</span>
@@ -450,22 +691,24 @@ export default function Positions() {
             )}
             
             {/* Error State */}
-            {error && (
+            {(positionsError || supplyPositionsError) && (
               <Card className="bg-destructive/10 p-6 rounded-2xl text-center text-destructive my-4">
-                <p>Failed to load positions: {error.message}</p>
+                <p>Failed to load positions: {positionsError?.message || supplyPositionsError?.message}</p>
                 <p className="text-sm mt-2">Please try again later or contact support</p>
               </Card>
             )}
             
             {/* Not Connected State */}
-            {!isConnected && !isLoading && (
+            {!isConnected && !isPositionsLoading && !isSupplyPositionsLoading && (
               <Card className="bg-card p-6 rounded-2xl text-center text-muted-foreground">
                 <p>Connect your wallet to view positions</p>
               </Card>
             )}
             
             {/* Connected but No Positions */}
-            {isConnected && !isLoading && !error && filteredPositions.length === 0 && (
+            {isConnected && !isPositionsLoading && !isSupplyPositionsLoading && !positionsError && !supplyPositionsError && 
+              ((currentTab === "earning" && supplyPositions.length === 0) || 
+               (currentTab === "borrowing" && filteredPositions.length === 0)) && (
               <Card className="bg-card p-6 rounded-2xl text-center text-muted-foreground">
                 {currentTab === "earning" ? (
                   <p>You have no active earning positions</p>
@@ -475,139 +718,166 @@ export default function Positions() {
               </Card>
             )}
             
-            {/* Positions List */}
+            {/* Supply Positions List - Earning Tab */}
             <TabsContent value="earning">
-              {isConnected && !isLoading && !error && filteredPositions.length > 0 && filteredPositions.map((position) => (
-                <Card key={position.positionId} className="bg-card p-6 rounded-2xl mb-4">
-                  <span className="block text-xl mb-2">Aave Celo Pool</span>
-                  <span className="block text-muted-foreground">Supplied: {position.collateralAssetSymbol || position.assetSymbol}</span>
-                  <div className="flex items-center gap-2 mt-2 mb-4">
-                    <div className="h-8 w-8 bg-blue-100 dark:bg-blue-900 rounded-full flex items-center justify-center text-blue-500 font-bold">
-                      {(position.collateralAssetSymbol || position.assetSymbol)?.[0]}
-                    </div>
-                    <span className="text-2xl font-bold">{position.formattedCollateralAmount}</span>
-                    <span className="text-muted-foreground">${position.formattedCollateralAmount}</span>
-                  </div>
-                  <div className="mb-4">
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="text-muted-foreground">Supply APY</span>
-                      <span className="text-lg font-semibold">
-                        {(position.collateralAssetSymbol || position.assetSymbol) === 'USDC' ? '0.1%' : '0.01%'}
-                      </span>
-                      <span className="text-blue-400">✦</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-muted-foreground">Monthly yield</span>
-                      <Info className="h-4 w-4 text-muted-foreground" />
-                      <span className="text-lg font-semibold">
-                        {(parseFloat(position.formattedCollateralAmount || '0') * 
-                          ((position.collateralAssetSymbol || position.assetSymbol) === 'USDC' ? 0.1 : 0.01) / 100 / 12).toFixed(6)}
-                      </span>
-                      <span className="text-blue-400">✦</span>
-                    </div>
-                  </div>
-                  <div className="flex gap-4 mt-2">
+              {/* Main Supply Positions Display */}
+              {isConnected && !isSupplyPositionsLoading && !supplyPositionsError && (
+                supplyPositions.length > 0 ? (
+                  supplyPositions.map((position) => (
+                    <Card key={position.supplyPositionId} className="bg-card p-6 rounded-2xl mb-4">
+                      <span className="block text-xl mb-2">Aave Celo Pool</span>
+                      <span className="block text-muted-foreground">Supplied: {position.assetSymbol}</span>
+                      <div className="flex items-center gap-2 mt-2 mb-4">
+                        <div className="h-8 w-8 bg-blue-100 dark:bg-blue-900 rounded-full flex items-center justify-center text-blue-500 font-bold">
+                          {position.assetSymbol?.[0]}
+                        </div>
+                        <span className="text-2xl font-bold">{position.formattedAmount}</span>
+                        <span className="text-muted-foreground">${position.formattedAmount}</span>
+                      </div>
+                      
+                      <div className="mb-4">
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="text-muted-foreground">Supply APY</span>
+                          <span className="text-lg font-semibold">
+                            {getSupplyAPY(position.assetSymbol)}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-muted-foreground">Monthly yield</span>
+                          <span className="text-lg font-semibold">
+                            {calculateMonthlyYield(position)} {position.assetSymbol}
+                          </span>
+                        </div>
+                      </div>
+                      
+                      <div className="flex gap-4 mt-2">
+                        <Button 
+                          variant="secondary" 
+                          className="flex-1 bg-card border border-border text-foreground"
+                          onClick={() => handleSupplyClick(position)}
+                        >
+                          Add Supply
+                        </Button>
+                        <Button 
+                          variant="secondary" 
+                          className="flex-1 bg-card border border-border text-foreground"
+                          onClick={() => handleCloseSupplyClick(position)}
+                        >
+                          Withdraw
+                        </Button>
+                      </div>
+                    </Card>
+                  ))
+                ) : (
+                  <Card className="bg-card p-6 rounded-2xl text-center text-muted-foreground">
+                    <p>You have no active earning positions</p>
                     <Button 
-                      variant="secondary" 
-                      className="flex-1 bg-card border border-border text-foreground"
-                      onClick={() => handleModifyClick(position)}
+                      variant="outline" 
+                      className="mt-4"
+                      onClick={() => router.push('/earn')}
                     >
-                      Modify
+                      <Plus className="mr-2 h-4 w-4" />
+                      Create supply position
                     </Button>
-                    <Button 
-                      variant="secondary" 
-                      className="flex-1 bg-card border border-border text-foreground"
-                      onClick={() => handleCloseClick(position)}
-                    >
-                      Close
-                    </Button>
-                  </div>
-                </Card>
-              ))}
+                  </Card>
+                )
+              )}
             </TabsContent>
             
+            {/* Borrowing Positions List - Borrowing Tab */}
             <TabsContent value="borrowing">
-              {isConnected && !isLoading && !error && filteredPositions.length > 0 && filteredPositions.map((position) => (
-                <Card key={position.positionId} className="bg-card p-6 rounded-2xl mb-4">
-                  <span className="block text-xl mb-2">Aave Celo Pool</span>
-                  <div className="flex justify-between text-muted-foreground">
-                    <div>
-                      <span className="block font-medium">Borrowed</span>
-                      <span className="block">{position.borrowAssetSymbol}</span>
-                    </div>
-                    <div>
-                      <span className="block font-medium">Collateral</span>
-                      <span className="block">{position.collateralAssetSymbol}</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 mt-3 mb-4">
-                    <div className="h-8 w-8 bg-blue-100 dark:bg-blue-900 rounded-full flex items-center justify-center text-blue-500 font-bold">
-                      {position.borrowAssetSymbol?.[0]}
-                    </div>
-                    <span className="text-2xl font-bold">{position.formattedBorrowAmount}</span>
-                    <span className="text-muted-foreground">${position.formattedBorrowAmount}</span>
-                  </div>
-                  <div className="mb-4">
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="text-muted-foreground">Borrow APY</span>
-                      <span className="text-lg font-semibold">
-                        {position.borrowAssetSymbol === 'USDC' ? '3.5%' : '3.2%'}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-muted-foreground">Collateral</span>
-                      <span className="text-lg font-semibold">{position.formattedCollateralAmount} {position.collateralAssetSymbol}</span>
-                    </div>
-                    {__DEV__ && (
-                      <div className="mt-2 text-xs text-muted-foreground border-t border-border pt-2">
-                        <div>Borrow Asset: {position.borrowAsset.substring(0, 8)}...</div>
-                        <div>Collateral Asset: {position.collateralAsset.substring(0, 8)}...</div>
+              {isConnected && !isPositionsLoading && !positionsError && (
+                filteredPositions.length > 0 ? (
+                  filteredPositions.map((position) => (
+                    <Card key={position.positionId} className="bg-card p-6 rounded-2xl mb-4">
+                      <span className="block text-xl mb-2">Aave Celo Pool</span>
+                      <div className="flex justify-between text-muted-foreground">
+                        <div>
+                          <span className="block font-medium">Borrowed</span>
+                          <span className="block">{position.borrowAssetSymbol}</span>
+                        </div>
+                        <div>
+                          <span className="block font-medium">Collateral</span>
+                          <span className="block">{position.collateralAssetSymbol}</span>
+                        </div>
                       </div>
-                    )}
-                  </div>
-                  <div className="flex gap-4 mt-2">
-                    <Button 
-                      variant="secondary" 
-                      className="flex-1 bg-card border border-border text-foreground"
-                      onClick={() => handleModifyClick(position)}
-                    >
-                      Modify
-                    </Button>
-                    
-                    {/* Check if the position has debt */}
-                    {position.borrowAmount > BigInt(0) ? (
-                      <Button 
-                        variant="secondary" 
-                        className="flex-1 bg-card border border-border text-foreground"
-                        onClick={() => handleRepayClick(position)}
-                      >
-                        Repay
-                      </Button>
-                    ) : (
-                      <Button 
-                        variant="secondary" 
-                        className="flex-1 bg-card border border-border text-foreground"
-                        onClick={() => handleWithdrawClick(position)}
-                      >
-                        Withdraw
-                      </Button>
-                    )}
-                  </div>
-                  
-                  {/* Show additional action if debt is fully repaid but collateral remains */}
-                  {position.borrowAmount === BigInt(0) && position.collateralAmount > BigInt(0) && (
-                    <div className="mt-4">
-                      <Button 
-                        variant="outline"
-                        className="w-full text-green-600 border-green-600 hover:bg-green-50 dark:hover:bg-green-950"
-                        onClick={() => handleWithdrawClick(position)}
-                      >
-                        Withdraw Collateral
-                      </Button>
-                    </div>
-                  )}
-                </Card>
-              ))}
+                      <div className="flex items-center gap-2 mt-3 mb-4">
+                        <div className="h-8 w-8 bg-blue-100 dark:bg-blue-900 rounded-full flex items-center justify-center text-blue-500 font-bold">
+                          {position.borrowAssetSymbol?.[0]}
+                        </div>
+                        <span className="text-2xl font-bold">{position.formattedBorrowAmount}</span>
+                        <span className="text-muted-foreground">${position.formattedBorrowAmount}</span>
+                      </div>
+                      <div className="mb-4">
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="text-muted-foreground">Borrow APY</span>
+                          <span className="text-lg font-semibold">
+                            1.2%
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-muted-foreground">Collateral</span>
+                          <span className="text-lg font-semibold">{position.formattedCollateralAmount} {position.collateralAssetSymbol}</span>
+                        </div>
+                        {__DEV__ && (
+                          <div className="mt-2 text-xs text-muted-foreground border-t border-border pt-2">
+                            <div>Borrow Asset: {position.borrowAsset.substring(0, 8)}...</div>
+                            <div>Collateral Asset: {position.collateralAsset.substring(0, 8)}...</div>
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex gap-4 mt-2">
+                        <Button 
+                          variant="secondary" 
+                          className="flex-1 bg-card border border-border text-foreground"
+                          onClick={() => handleModifyClick(position)}
+                        >
+                          Modify
+                        </Button>
+                        
+                        {/* Check if the position has debt */}
+                        {position.borrowAmount > BigInt(0) ? (
+                          <Button 
+                            variant="secondary" 
+                            className="flex-1 bg-card border border-border text-foreground"
+                            onClick={() => handleRepayClick(position)}
+                          >
+                            Repay
+                          </Button>
+                        ) : (
+                          <Button 
+                            variant="secondary" 
+                            className="flex-1 bg-card border border-border text-foreground"
+                            onClick={() => handleWithdrawClick(position)}
+                          >
+                            Withdraw
+                          </Button>
+                        )}
+                      </div>
+                      
+                      {/* Show additional action if debt is fully repaid but collateral remains */}
+                      {position.borrowAmount === BigInt(0) && position.collateralAmount > BigInt(0) && (
+                        <div className="mt-4">
+                          <Button 
+                            variant="outline"
+                            className="w-full text-green-600 border-green-600 hover:bg-green-50 dark:hover:bg-green-950"
+                            onClick={() => handleWithdrawClick(position)}
+                          >
+                            Withdraw Collateral
+                          </Button>
+                          <p className="text-xs text-center mt-1 text-muted-foreground">
+                            Your loan is fully repaid. You can withdraw your collateral now.
+                          </p>
+                        </div>
+                      )}
+                    </Card>
+                  ))
+                ) : (
+                  <Card className="bg-card p-6 rounded-2xl text-center text-muted-foreground">
+                    <p>You have no active borrowing positions</p>
+                  </Card>
+                )
+              )}
             </TabsContent>
           </Tabs>
           
@@ -628,7 +898,7 @@ export default function Positions() {
         </div>
       </div>
       
-      {/* Add Collateral Dialog */}
+      {/* Add Collateral Dialog - Handle both regular and supply positions */}
       <Dialog open={modifyDialogOpen} onOpenChange={setModifyDialogOpen}>
         <DialogContent className="sm:max-w-[425px]">
           <DialogHeader>
@@ -638,7 +908,13 @@ export default function Positions() {
             </DialogDescription>
           </DialogHeader>
           
-          {renderTransactionStatus(isAddingCollateral, isAddSuccess, addError, addTxHash, "Adding collateral")}
+          {renderTransactionStatus(
+            isAddingCollateral || isSupplyModifying, 
+            isAddSuccess || isSupplyModified, 
+            addError || supplyModifyError, 
+            addTxHash || supplyModifyTxHash, 
+            "Adding funds"
+          )}
           
           <div className="grid gap-4 py-4">
             <div className="grid gap-2">
@@ -648,10 +924,16 @@ export default function Positions() {
                 placeholder="0.00"
                 value={additionalAmount}
                 onChange={(e) => setAdditionalAmount(e.target.value)}
-                disabled={isAddingCollateral || isAddSuccess}
+                disabled={isAddingCollateral || isAddSuccess || isSupplyModifying || isSupplyModified}
               />
               <p className="text-xs text-muted-foreground">
-                Current position: {selectedPosition?.formattedCollateralAmount} {selectedPosition?.collateralAssetSymbol || selectedPosition?.assetSymbol}
+                Current position: {
+                  selectedPosition?.formattedCollateralAmount || 
+                  selectedPosition?.formattedAmount
+                } {
+                  selectedPosition?.collateralAssetSymbol || 
+                  selectedPosition?.assetSymbol
+                }
               </p>
             </div>
           </div>
@@ -659,15 +941,22 @@ export default function Positions() {
             <Button 
               variant="outline" 
               onClick={() => setModifyDialogOpen(false)}
-              disabled={isAddingCollateral}
+              disabled={isAddingCollateral || isSupplyModifying}
             >
               Cancel
             </Button>
             <Button 
-              onClick={handleAddCollateral}
-              disabled={!additionalAmount || parseFloat(additionalAmount) <= 0 || isAddingCollateral || isAddSuccess}
+              onClick={selectedPosition?.supplyPositionId ? handleIncreaseSupply : handleAddCollateral}
+              disabled={
+                !additionalAmount || 
+                parseFloat(additionalAmount) <= 0 || 
+                isAddingCollateral || 
+                isAddSuccess || 
+                isSupplyModifying || 
+                isSupplyModified
+              }
             >
-              {isAddingCollateral ? (
+              {isAddingCollateral || isSupplyModifying ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   Adding...
@@ -675,7 +964,7 @@ export default function Positions() {
               ) : (
                 <>
                   <Plus className="mr-2 h-4 w-4" />
-                  Add Collateral
+                  Add Funds
                 </>
               )}
             </Button>
@@ -683,22 +972,36 @@ export default function Positions() {
         </DialogContent>
       </Dialog>
       
-      {/* Close Position Dialog */}
+      {/* Close Position Dialog - Handle both regular and supply positions */}
       <Dialog open={closeDialogOpen} onOpenChange={setCloseDialogOpen}>
         <DialogContent className="sm:max-w-[425px]">
           <DialogHeader>
             <DialogTitle>Close Position</DialogTitle>
             <DialogDescription>
-              Are you sure you want to close this position? All collateral will be withdrawn.
+              Are you sure you want to close this position? All funds will be withdrawn.
             </DialogDescription>
           </DialogHeader>
           
-          {renderTransactionStatus(isClosing, isCloseSuccess, closeError, closeTxHash, "Closing position")}
+          {renderTransactionStatus(
+            isClosing || isSupplyModifying, 
+            isCloseSuccess || isSupplyModified, 
+            closeError || supplyModifyError, 
+            closeTxHash || supplyModifyTxHash, 
+            "Closing position"
+          )}
           
           <div className="py-4">
             <div className="rounded-lg bg-muted p-4">
               <p className="font-medium">Position Details</p>
-              <p className="text-sm text-muted-foreground mt-2">Collateral: {selectedPosition?.formattedCollateralAmount} {selectedPosition?.collateralAssetSymbol || selectedPosition?.assetSymbol}</p>
+              <p className="text-sm text-muted-foreground mt-2">
+                {selectedPosition?.supplyPositionId ? 'Supply' : 'Collateral'}: {
+                  selectedPosition?.formattedCollateralAmount || 
+                  selectedPosition?.formattedAmount
+                } {
+                  selectedPosition?.collateralAssetSymbol || 
+                  selectedPosition?.assetSymbol
+                }
+              </p>
               {selectedPosition?.borrowAmount > 0 && (
                 <p className="text-sm text-muted-foreground">Borrowed: {selectedPosition?.formattedBorrowAmount} {selectedPosition?.borrowAssetSymbol}</p>
               )}
@@ -708,16 +1011,16 @@ export default function Positions() {
             <Button 
               variant="outline" 
               onClick={() => setCloseDialogOpen(false)}
-              disabled={isClosing}
+              disabled={isClosing || isSupplyModifying}
             >
               Cancel
             </Button>
             <Button 
               variant="destructive"
-              onClick={handleClosePosition}
-              disabled={isClosing || isCloseSuccess}
+              onClick={selectedPosition?.supplyPositionId ? handleCloseSupplyPosition : handleClosePosition}
+              disabled={isClosing || isCloseSuccess || isSupplyModifying || isSupplyModified}
             >
-              {isClosing ? (
+              {isClosing || isSupplyModifying ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   Closing...
@@ -896,8 +1199,8 @@ export default function Positions() {
                     <div className="mt-1 pt-1 border-t border-border text-xs">
                       <p>Debug Info:</p>
                       <p>Borrow Token: {borrowTokenSymbol || 'Not set'}</p>
-                      <p>Asset Address: {selectedPosition?.borrowAsset.substring(0, 10)}...</p>
-                      <p>Position Symbol: {selectedPosition?.borrowAssetSymbol}</p>
+                      <p>Asset Address: {selectedPosition?.borrowAsset ? selectedPosition.borrowAsset.substring(0, 10) + '...' : 'N/A'}</p>
+                      <p>Position Symbol: {selectedPosition?.borrowAssetSymbol || 'N/A'}</p>
                       <p>Available Balance: {borrowTokenBalance}</p>
                     </div>
                   )}
@@ -943,74 +1246,39 @@ export default function Positions() {
       <Dialog open={withdrawDialogOpen} onOpenChange={setWithdrawDialogOpen}>
         <DialogContent className="sm:max-w-[425px]">
           <DialogHeader>
-            <DialogTitle>Withdraw Collateral</DialogTitle>
+            <DialogTitle>Withdraw {selectedPosition?.assetSymbol}</DialogTitle>
             <DialogDescription>
-              Choose how much collateral you want to withdraw
+              Choose how much to withdraw from your supply position
             </DialogDescription>
           </DialogHeader>
           
-          {renderTransactionStatus(isWithdrawing, isWithdrawSuccess, withdrawError, withdrawTxHash, "Withdrawing collateral")}
+          {renderTransactionStatus(
+            isSupplyModifying, 
+            isSupplyModified, 
+            supplyModifyError, 
+            supplyModifyTxHash, 
+            "Withdrawing funds"
+          )}
           
           <div className="grid gap-4 py-4">
-            <div className="rounded-lg bg-muted p-4 mb-2">
-              <p className="font-medium">Available Collateral</p>
-              <div className="flex justify-between items-center mt-1">
-                <div>
-                  <p className="text-sm text-muted-foreground">Collateral Asset:</p>
-                  <p className="text-lg font-semibold">
-                    {selectedPosition?.collateralAssetSymbol || selectedPosition?.assetSymbol}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Amount:</p>
-                  <p className="text-lg font-semibold">{selectedPosition?.formattedCollateralAmount}</p>
-                </div>
-              </div>
-              
-              {/* Show if there's still debt */}
-              {selectedPosition?.borrowAmount > 0 && (
-                <div className="mt-2 p-2 bg-yellow-100 dark:bg-yellow-900 rounded-md text-yellow-800 dark:text-yellow-200 text-xs">
-                  <p className="font-medium">Warning: You still have outstanding debt</p>
-                  <p>You must pay off your debt first before withdrawing all collateral.</p>
-                </div>
-              )}
+            <div className="flex gap-2">
+              <Button
+                variant={withdrawType === "partial" ? "default" : "outline"}
+                className="flex-1"
+                onClick={() => setWithdrawType("partial")}
+                disabled={isSupplyModifying || isSupplyModified}
+              >
+                Partial
+              </Button>
+              <Button
+                variant={withdrawType === "full" ? "default" : "outline"}
+                className="flex-1"
+                onClick={() => setWithdrawType("full")}
+                disabled={isSupplyModifying || isSupplyModified}
+              >
+                Full withdrawal
+              </Button>
             </div>
-            
-            <RadioGroup 
-              value={withdrawType} 
-              onValueChange={(value) => setWithdrawType(value as "partial" | "full")}
-              className="grid grid-cols-2 gap-4"
-              disabled={isWithdrawing || isWithdrawSuccess}
-            >
-              <div>
-                <RadioGroupItem
-                  value="partial"
-                  id="partial-withdraw"
-                  className="peer sr-only"
-                />
-                <Label
-                  htmlFor="partial-withdraw"
-                  className="flex flex-col items-center justify-between rounded-md border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary"
-                >
-                  <span className="mb-1">Partial Withdrawal</span>
-                  <span className="text-xs text-muted-foreground">Custom amount</span>
-                </Label>
-              </div>
-              <div>
-                <RadioGroupItem
-                  value="full"
-                  id="full-withdraw"
-                  className="peer sr-only"
-                />
-                <Label
-                  htmlFor="full-withdraw"
-                  className="flex flex-col items-center justify-between rounded-md border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary"
-                >
-                  <span className="mb-1">Full Withdrawal</span>
-                  <span className="text-xs text-muted-foreground">All collateral</span>
-                </Label>
-              </div>
-            </RadioGroup>
             
             {withdrawType === "partial" && (
               <div className="grid gap-2">
@@ -1020,42 +1288,38 @@ export default function Positions() {
                   placeholder="0.00"
                   value={withdrawAmount}
                   onChange={(e) => setWithdrawAmount(e.target.value)}
-                  disabled={isWithdrawing || isWithdrawSuccess}
+                  disabled={isSupplyModifying || isSupplyModified}
                 />
-                {withdrawAmount && parseFloat(withdrawAmount) > parseFloat(selectedPosition?.formattedCollateralAmount || "0") && (
-                  <p className="text-red-500 text-xs">
-                    Amount exceeds available collateral
-                  </p>
-                )}
                 <p className="text-xs text-muted-foreground">
-                  Note: You will receive {selectedPosition?.collateralAssetSymbol || selectedPosition?.assetSymbol} in your wallet
+                  Available to withdraw: {selectedPosition?.formattedAmount} {selectedPosition?.assetSymbol}
                 </p>
               </div>
             )}
           </div>
+          
           <DialogFooter>
             <Button 
               variant="outline" 
               onClick={() => setWithdrawDialogOpen(false)}
-              disabled={isWithdrawing}
+              disabled={isSupplyModifying}
             >
               Cancel
             </Button>
             <Button 
-              onClick={handleWithdrawCollateral}
+              onClick={handleWithdrawSupply}
               disabled={
-                (withdrawType === "partial" && (!withdrawAmount || parseFloat(withdrawAmount) <= 0 || parseFloat(withdrawAmount) > parseFloat(selectedPosition?.formattedCollateralAmount || "0"))) ||
-                isWithdrawing || 
-                isWithdrawSuccess
+                (withdrawType === "partial" && (!withdrawAmount || parseFloat(withdrawAmount) <= 0)) ||
+                isSupplyModifying || 
+                isSupplyModified
               }
             >
-              {isWithdrawing ? (
+              {isSupplyModifying ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   Withdrawing...
                 </>
               ) : (
-                `Withdraw ${withdrawType === "full" ? "All" : ""}`
+                "Withdraw"
               )}
             </Button>
           </DialogFooter>

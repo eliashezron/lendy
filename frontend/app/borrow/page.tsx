@@ -11,7 +11,7 @@ import { useRouter } from "next/navigation";
 import { useTokenBalance } from "@/hooks/useTokenBalance";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { TokenIcon } from "@/components/token-icon"; 
-import { useCreatePosition, PositionMode } from "@/hooks/useCreatePosition";
+import { useCreatePosition } from "@/hooks/useCreatePosition";
 
 // Supply APY rates from Aave
 const SUPPLY_APY_RATES = {
@@ -42,7 +42,15 @@ export default function Borrow() {
   // Hook state
   const { isConnected, address } = useAccount();
   const router = useRouter();
-  const { createPosition, isLoading, isSuccess, error, txHash } = useCreatePosition();
+  const { 
+    createPosition, 
+    isLoading, 
+    isSuccess, 
+    error, 
+    txHash,
+    isApprovalStepComplete,
+    approvalTxHash,
+  } = useCreatePosition();
   
   // Get token balances
   const { 
@@ -262,7 +270,6 @@ export default function Borrow() {
         collateralToken!, 
         collateralAmount, 
         collateralDecimals,
-        PositionMode.BORROW,
         {
           borrowAsset: borrowToken!,
           borrowAmount: borrowAmount,
@@ -283,13 +290,55 @@ export default function Borrow() {
   const renderTransactionStatus = () => {
     if (isLoading) {
       return (
-        <Alert variant="default" className="mb-4 animate-pulse">
-          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-          <AlertTitle>Transaction in progress</AlertTitle>
-          <AlertDescription>
-            Creating your position...
-          </AlertDescription>
-        </Alert>
+        <div className="mb-4 space-y-2">
+          {/* Approval step */}
+          <Alert variant={isApprovalStepComplete ? "success" : "default"} className={isApprovalStepComplete ? "" : "animate-pulse"}>
+            {isApprovalStepComplete ? (
+              <CheckCircle className="h-4 w-4 mr-2" />
+            ) : (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            )}
+            <AlertTitle>Step 1: {isApprovalStepComplete ? "Approval complete" : "Approving token..."}</AlertTitle>
+            {approvalTxHash && (
+              <AlertDescription>
+                <a 
+                  href={`https://celoscan.io/tx/${approvalTxHash}`} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="flex items-center text-green-600 hover:text-green-700 text-xs mt-1"
+                >
+                  <ExternalLink className="h-3 w-3 mr-1" />
+                  View approval transaction
+                </a>
+              </AlertDescription>
+            )}
+          </Alert>
+          
+          {/* Position creation step - only show if approval is complete */}
+          {isApprovalStepComplete && (
+            <Alert variant={isSuccess ? "success" : "default"} className={isSuccess ? "" : "animate-pulse"}>
+              {isSuccess ? (
+                <CheckCircle className="h-4 w-4 mr-2" />
+              ) : (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              )}
+              <AlertTitle>Step 2: {isSuccess ? "Position created" : "Creating position..."}</AlertTitle>
+              {isSuccess && txHash && (
+                <AlertDescription>
+                  <a 
+                    href={`https://celoscan.io/tx/${txHash}`} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="flex items-center text-green-600 hover:text-green-700"
+                  >
+                    <ExternalLink className="h-4 w-4 mr-2" />
+                    View transaction
+                  </a>
+                </AlertDescription>
+              )}
+            </Alert>
+          )}
+        </div>
       );
     }
     

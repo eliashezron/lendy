@@ -16,7 +16,7 @@ import { useTokenBalance } from "@/hooks/useTokenBalance";
 import { useAccount } from "wagmi";
 import { useRouter } from "next/navigation";
 import { Input } from "@/components/ui/input"; 
-import { useCreatePosition, PositionMode } from "@/hooks/useCreatePosition";
+import { useSupplyPosition } from "@/hooks/useSupplyPosition";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 
 // Supply APY rates from Aave
@@ -33,7 +33,15 @@ export default function Earn() {
   const { balance, rawBalance, decimals } = useTokenBalance(selectedToken);
   const { isConnected } = useAccount();
   const router = useRouter();
-  const { createPosition, isLoading, isSuccess, error, txHash } = useCreatePosition();
+  const { 
+    createSupplyPosition, 
+    isLoading, 
+    isSuccess, 
+    error, 
+    txHash,
+    isApprovalStepComplete,
+    approvalTxHash,
+  } = useSupplyPosition();
   
   // Reset form after successful transaction
   useEffect(() => {
@@ -110,6 +118,13 @@ export default function Earn() {
     // Check if amount is at least 0.1 tokens (minimum required)
     const MIN_AMOUNT = 0.1;
     
+    console.log('Validating amount:', {
+      amount: numericAmount,
+      balance: numericBalance,
+      minAmount: MIN_AMOUNT,
+      isValid: numericAmount >= MIN_AMOUNT && numericAmount <= numericBalance
+    });
+    
     return numericAmount >= MIN_AMOUNT && numericAmount <= numericBalance;
   };
 
@@ -136,26 +151,72 @@ export default function Earn() {
     if (!selectedToken || !isAmountValid() || !isConnected) return;
     
     try {
-      console.log(`Starting position creation process for ${amount} ${selectedToken} with decimals ${decimals}`);
-      await createPosition(selectedToken, amount, decimals, PositionMode.EARN_ONLY);
+      console.log(`Starting supply position creation process for ${amount} ${selectedToken}`);
+      console.log(`Token decimals: ${decimals}`);
+      console.log(`Expected on-chain amount: ${parseFloat(amount) * Math.pow(10, decimals)}`);
+      console.log(`User balance: ${balance} ${selectedToken}`);
+      
+      await createSupplyPosition(selectedToken, amount, decimals);
     } catch (err) {
-      console.error("Failed to create position:", err);
+      console.error("Failed to create supply position:", err);
     }
   };
 
   // Render transaction status alert
   const renderTransactionStatus = () => {
-    console.log("Transaction status:", { isLoading, isSuccess, error, txHash });
+    console.log("Transaction status:", { isLoading, isSuccess, error, txHash, isApprovalStepComplete });
     
     if (isLoading) {
       return (
-        <Alert variant="default" className="mb-4 animate-pulse">
-          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-          <AlertTitle>Transaction in progress</AlertTitle>
-          <AlertDescription>
-            Creating your position...
-          </AlertDescription>
-        </Alert>
+        <div className="mb-4 space-y-2">
+          {/* Approval step */}
+          <Alert variant={isApprovalStepComplete ? "success" : "default"} className={isApprovalStepComplete ? "" : "animate-pulse"}>
+            {isApprovalStepComplete ? (
+              <CheckCircle className="h-4 w-4 mr-2" />
+            ) : (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            )}
+            <AlertTitle>Step 1: {isApprovalStepComplete ? "Approval complete" : "Approving token..."}</AlertTitle>
+            {approvalTxHash && (
+              <AlertDescription>
+                <a 
+                  href={`https://celoscan.io/tx/${approvalTxHash}`} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="flex items-center text-green-600 hover:text-green-700 text-xs mt-1"
+                >
+                  <ExternalLink className="h-3 w-3 mr-1" />
+                  View approval transaction
+                </a>
+              </AlertDescription>
+            )}
+          </Alert>
+          
+          {/* Supply step - only show if approval is complete */}
+          {isApprovalStepComplete && (
+            <Alert variant={isSuccess ? "success" : "default"} className={isSuccess ? "" : "animate-pulse"}>
+              {isSuccess ? (
+                <CheckCircle className="h-4 w-4 mr-2" />
+              ) : (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              )}
+              <AlertTitle>Step 2: {isSuccess ? "Supply complete" : "Supplying tokens..."}</AlertTitle>
+              {isSuccess && txHash && (
+                <AlertDescription>
+                  <a 
+                    href={`https://celoscan.io/tx/${txHash}`} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="flex items-center text-green-600 hover:text-green-700"
+                  >
+                    <ExternalLink className="h-4 w-4 mr-2" />
+                    View transaction
+                  </a>
+                </AlertDescription>
+              )}
+            </Alert>
+          )}
+        </div>
       );
     }
     

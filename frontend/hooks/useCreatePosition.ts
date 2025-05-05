@@ -1,13 +1,7 @@
 import { useState, useEffect } from 'react';
-import { useWriteContract, useReadContract, useWaitForTransactionReceipt, useAccount } from 'wagmi';
+import { useWriteContract, useWaitForTransactionReceipt, useAccount } from 'wagmi';
 import { tokenAddresses } from './useTokenBalance';
 import { CONTRACT_ADDRESSES, LENDY_POSITION_MANAGER_ABI, prepareTokenAmount, ERC20_ABI } from '@/lib/contracts';
-
-// Position creation modes
-export enum PositionMode {
-  EARN_ONLY = 'earn_only',   // Only supply, no borrowing
-  BORROW = 'borrow'          // Supply and borrow
-}
 
 // Parameters for creating a borrow position
 export interface BorrowParams {
@@ -67,11 +61,10 @@ export function useCreatePosition() {
   };
   
   const createPosition = async (
-    tokenSymbol: string, 
-    amount: string, 
-    decimals: number,
-    mode: PositionMode = PositionMode.EARN_ONLY,
-    borrowParams?: BorrowParams
+    collateralTokenSymbol: string, 
+    collateralAmount: string, 
+    collateralDecimals: number,
+    borrowParams: BorrowParams
   ) => {
     if (!isConnected) {
       throw new Error('Wallet not connected');
@@ -82,27 +75,43 @@ export function useCreatePosition() {
       setError(null);
       setIsSuccess(false);
       
-      // Get token address from tokenSymbol
-      const tokenAddress = tokenAddresses[tokenSymbol as keyof typeof tokenAddresses];
-      if (!tokenAddress) {
-        throw new Error(`Token ${tokenSymbol} not supported`);
+      // Get collateral token address
+      const collateralTokenAddress = tokenAddresses[collateralTokenSymbol.toLowerCase() as keyof typeof tokenAddresses];
+      if (!collateralTokenAddress) {
+        throw new Error(`Collateral token ${collateralTokenSymbol} not supported`);
       }
       
-      // Convert amount to token units with decimals
-      const tokenAmount = prepareTokenAmount(amount, decimals);
+      // Convert collateral amount to token units with decimals
+      const collateralAmountInWei = prepareTokenAmount(collateralAmount, collateralDecimals);
       
-      // Check if amount is too small (minimum 0.1 token for stable coins)
+      // Check if collateral amount is too small
       const minAmount = BigInt(100000); // 0.1 with 6 decimals
-      if (tokenAmount < minAmount) {
-        throw new Error(`Amount is too small. Minimum deposit is 0.1 ${tokenSymbol.toUpperCase()}`);
+      if (collateralAmountInWei < minAmount) {
+        throw new Error(`Amount is too small. Minimum deposit is 0.1 ${collateralTokenSymbol.toUpperCase()}`);
       }
       
-      console.log('Starting position creation flow with token:', tokenAddress, 'amount:', tokenAmount.toString());
+      // Get borrow token address
+      const borrowTokenAddress = tokenAddresses[borrowParams.borrowAsset.toLowerCase() as keyof typeof tokenAddresses];
+      if (!borrowTokenAddress) {
+        throw new Error(`Borrow token ${borrowParams.borrowAsset} not supported`);
+      }
       
-      // First request token approval
+      // Convert borrow amount to token units with decimals
+      const borrowAmountInWei = prepareTokenAmount(borrowParams.borrowAmount, borrowParams.borrowDecimals);
+      
+      // Ensure borrow amount is not zero
+      if (borrowAmountInWei === BigInt(0)) {
+        throw new Error('Borrow amount must be greater than 0');
+      }
+      
+      console.log('Starting borrow position creation with:');
+      console.log('- Collateral:', collateralTokenSymbol, collateralAmount);
+      console.log('- Borrowing:', borrowParams.borrowAsset, borrowParams.borrowAmount);
+      
+      // First request token approval for collateral
       try {
-        console.log('Requesting token approval first');
-        await approveToken(tokenAddress as `0x${string}`, tokenAmount);
+        console.log('Requesting collateral token approval');
+        await approveToken(collateralTokenAddress as `0x${string}`, collateralAmountInWei);
         
         // Wait longer for approval to propagate on Celo network
         console.log('Waiting for approval confirmation...');
@@ -110,60 +119,19 @@ export function useCreatePosition() {
         
         console.log('Proceeding to create position');
         
-        // The createPosition function in the contract requires 5 parameters:
-        // 1. collateralAsset (address)
-        // 2. collateralAmount (uint256)
-        // 3. borrowAsset (address)
-        // 4. borrowAmount (uint256)
-        // 5. interestRateMode (uint256) - 1 for stable, 2 for variable
-        
-        let borrowAssetAddress: `0x${string}`;
-        let borrowAmountInWei: bigint;
-        
-        if (mode === PositionMode.BORROW && borrowParams) {
-          // User is borrowing - use provided parameters
-          const borrowTokenAddress = tokenAddresses[borrowParams.borrowAsset.toLowerCase() as keyof typeof tokenAddresses];
-          if (!borrowTokenAddress) {
-            throw new Error(`Borrow token ${borrowParams.borrowAsset} not supported`);
-          }
-          
-          borrowAssetAddress = borrowTokenAddress as `0x${string}`;
-          borrowAmountInWei = prepareTokenAmount(borrowParams.borrowAmount, borrowParams.borrowDecimals);
-          
-          // Ensure borrow amount is not zero
-          if (borrowAmountInWei === BigInt(0)) {
-            throw new Error('Borrow amount must be greater than 0');
-          }
-        } else {
-          // For earn-only mode, we need to use the smallest possible valid borrow amount
-          // The contract requires borrow amount > 0, so we use 1 wei of a different asset
-          borrowAssetAddress = tokenSymbol.toLowerCase() === 'usdc' 
-            ? CONTRACT_ADDRESSES.usdt  // If collateral is USDC, borrow USDT
-            : CONTRACT_ADDRESSES.usdc; // If collateral is USDT, borrow USDC
-            
-          borrowAmountInWei = BigInt(1); // Minimum possible amount (1 wei)
-        }
-        
         const variableInterestRate = BigInt(2); // Using variable rate (2)
         
-        console.log('Creating position with parameters:');
-        console.log('- Collateral asset:', tokenAddress);
-        console.log('- Collateral amount:', tokenAmount.toString());
-        console.log('- Borrow asset:', borrowAssetAddress);
-        console.log('- Borrow amount:', borrowAmountInWei.toString());
-        console.log('- Interest rate mode:', variableInterestRate.toString());
-        
-        // Write to contract to create position with all 5 required arguments
+        // Write to contract to create position
         writeContract({
           address: CONTRACT_ADDRESSES.lendyPositionManager,
           abi: LENDY_POSITION_MANAGER_ABI,
           functionName: 'createPosition',
           args: [
-            tokenAddress as `0x${string}`,  // collateralAsset
-            tokenAmount,                    // collateralAmount
-            borrowAssetAddress,             // borrowAsset
-            borrowAmountInWei,              // borrowAmount
-            variableInterestRate            // interestRateMode (2 for variable)
+            collateralTokenAddress as `0x${string}`,  // collateralAsset
+            collateralAmountInWei,                    // collateralAmount
+            borrowTokenAddress as `0x${string}`,      // borrowAsset
+            borrowAmountInWei,                        // borrowAmount
+            variableInterestRate                      // interestRateMode (2 for variable)
           ],
         }, {
           onSuccess(hash: `0x${string}`) {
@@ -212,6 +180,9 @@ export function useCreatePosition() {
     isLoading: isLoading || isPending || isConfirming || isApprovalConfirming,
     isSuccess: isSuccess || isConfirmed,
     error,
-    txHash
+    txHash,
+    // Expose these for transaction step UI
+    isApprovalStepComplete: isApprovalConfirmed,
+    approvalTxHash
   };
 } 
