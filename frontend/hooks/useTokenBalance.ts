@@ -1,6 +1,7 @@
-import { useAccount, useReadContract } from 'wagmi';
-import { formatUnits } from 'viem';
-import { useEffect, useState } from 'react';
+import { useAccount, useReadContract, usePublicClient } from 'wagmi';
+import { formatUnits, createPublicClient, http } from 'viem';
+import { useEffect, useState, useCallback } from 'react';
+import { celo } from 'viem/chains';
 
 // ERC20 ABI (minimal for balanceOf function)
 const erc20ABI = [
@@ -30,17 +31,27 @@ export function useTokenBalance(tokenSymbol: string | null) {
   const [balance, setBalance] = useState<string>('0.00');
   const [rawBalance, setRawBalance] = useState<bigint>(BigInt(0));
   const [decimals, setDecimals] = useState<number>(6); // Default for stablecoins
+  const [isMiniPay, setIsMiniPay] = useState<boolean>(false);
   const { address, isConnected } = useAccount();
+  const publicClient = usePublicClient();
+
+  // Check if user is using MiniPay
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      setIsMiniPay(window.ethereum?.isMiniPay || false);
+    }
+  }, []);
 
   const tokenAddress = tokenSymbol ? tokenAddresses[tokenSymbol as keyof typeof tokenAddresses] : undefined;
 
+  // Use Wagmi's hook for standard wallet connections
   const { data: balanceData } = useReadContract({
     address: tokenAddress as `0x${string}`,
     abi: erc20ABI,
     functionName: 'balanceOf',
     args: [address as `0x${string}`],
     query: {
-      enabled: !!address && !!tokenAddress && isConnected,
+      enabled: !!address && !!tokenAddress && isConnected && !isMiniPay,
     },
   });
 
@@ -53,6 +64,58 @@ export function useTokenBalance(tokenSymbol: string | null) {
     },
   });
 
+  // Direct method for MiniPay users
+  const fetchMiniPayBalance = useCallback(async () => {
+    if (!isConnected || !address || !tokenAddress || !isMiniPay) return;
+
+    try {
+      console.log('Fetching balance for MiniPay user...');
+      // Create a custom client for direct interaction
+      const client = publicClient || createPublicClient({
+        chain: celo,
+        transport: http(),
+      });
+
+      // Fetch decimals first
+      const fetchedDecimals = await client.readContract({
+        address: tokenAddress as `0x${string}`,
+        abi: erc20ABI,
+        functionName: 'decimals',
+      });
+
+      // Set decimals
+      if (fetchedDecimals) {
+        setDecimals(Number(fetchedDecimals));
+      }
+
+      // Fetch balance
+      const fetchedBalance = await client.readContract({
+        address: tokenAddress as `0x${string}`,
+        abi: erc20ABI,
+        functionName: 'balanceOf',
+        args: [address],
+      });
+
+      // Update balance state
+      if (fetchedBalance) {
+        const rawBal = fetchedBalance as bigint;
+        setRawBalance(rawBal);
+        setBalance(formatUnits(rawBal, Number(fetchedDecimals) || decimals));
+        console.log('MiniPay balance fetched:', formatUnits(rawBal, Number(fetchedDecimals) || decimals));
+      }
+    } catch (error) {
+      console.error('Error fetching MiniPay balance:', error);
+    }
+  }, [address, decimals, isConnected, isMiniPay, publicClient, tokenAddress]);
+
+  // Effect for MiniPay users
+  useEffect(() => {
+    if (isMiniPay && isConnected && address && tokenAddress) {
+      fetchMiniPayBalance();
+    }
+  }, [address, fetchMiniPayBalance, isConnected, isMiniPay, tokenAddress]);
+
+  // Effect for standard wallet users
   useEffect(() => {
     if (decimalsData) {
       setDecimals(Number(decimalsData));
@@ -60,15 +123,17 @@ export function useTokenBalance(tokenSymbol: string | null) {
   }, [decimalsData]);
 
   useEffect(() => {
-    if (balanceData) {
+    // Only update for standard wallet users (not MiniPay)
+    if (balanceData && !isMiniPay) {
       const rawBal = balanceData as bigint;
       setRawBalance(rawBal);
       setBalance(formatUnits(rawBal, decimals));
-    } else {
+    } else if (!isMiniPay) {
+      // Reset for non-MiniPay users when no data
       setRawBalance(BigInt(0));
       setBalance('0.00');
     }
-  }, [balanceData, decimals]);
+  }, [balanceData, decimals, isMiniPay]);
 
-  return { balance, rawBalance, decimals };
+  return { balance, rawBalance, decimals, isMiniPay, refetch: fetchMiniPayBalance };
 } 

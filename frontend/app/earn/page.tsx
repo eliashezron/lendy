@@ -31,7 +31,7 @@ export default function Earn() {
   const [amount, setAmount] = useState("0.00");
   const [selectedPercentage, setSelectedPercentage] = useState<string | null>(null);
   const [selectedToken, setSelectedToken] = useState<string | null>(null);
-  const { balance, rawBalance, decimals } = useTokenBalance(selectedToken);
+  const { balance, rawBalance, decimals, isMiniPay, refetch: refetchBalance } = useTokenBalance(selectedToken);
   const { isConnected } = useAccount();
   const router = useRouter();
   const { 
@@ -75,6 +75,13 @@ export default function Earn() {
     }
   }, [balance, selectedPercentage]);
 
+  // Add an effect to refetch balance when token changes with MiniPay
+  useEffect(() => {
+    if (isMiniPay && selectedToken) {
+      refetchBalance();
+    }
+  }, [isMiniPay, selectedToken, refetchBalance]);
+
   const handlePercentageSelect = (percentage: string) => {
     setSelectedPercentage(percentage);
     
@@ -97,6 +104,20 @@ export default function Earn() {
     // Allow only numbers and decimal point
     if (/^(\d*\.?\d*)$/.test(value) || value === '') {
       setAmount(value === '' ? '0.00' : value);
+    }
+  };
+
+  const handleSelectedToken = (value: string) => {
+    setSelectedToken(value);
+    // Reset values
+    setSelectedPercentage(null);
+    setAmount("0.00");
+    
+    // Force refetch for MiniPay users
+    if (isMiniPay) {
+      setTimeout(() => {
+        refetchBalance();
+      }, 500);
     }
   };
 
@@ -292,7 +313,7 @@ export default function Earn() {
                     disabled={isLoading || isSuccess}
                   />
                   <Select 
-                    onValueChange={(value) => setSelectedToken(value)}
+                    onValueChange={handleSelectedToken}
                     disabled={isLoading || isSuccess}
                   >
                     <SelectTrigger className="w-[180px] border-none bg-transparent">
@@ -305,7 +326,14 @@ export default function Earn() {
                   </Select>
                 </div>
                 {isConnected && selectedToken ? (
-                  <p className="text-muted-foreground">Balance: {balance} {selectedToken.toUpperCase()}</p>
+                  <div>
+                    <p className="text-muted-foreground">Balance: {balance} {selectedToken.toUpperCase()}</p>
+                    {isMiniPay && (
+                      <p className="text-xs text-green-600 dark:text-green-400 mt-1">
+                        MiniPay wallet detected
+                      </p>
+                    )}
+                  </div>
                 ) : (
                   <p className="text-muted-foreground">select token</p>
                 )}

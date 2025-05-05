@@ -53,18 +53,35 @@ export default function Borrow() {
     approvalTxHash,
   } = useCreatePosition();
   
-  // Get token balances
+  // Get token balances with MiniPay support
   const { 
     balance: collateralBalance, 
     rawBalance: collateralRawBalance, 
-    decimals: collateralDecimals 
+    decimals: collateralDecimals,
+    isMiniPay: isCollateralMiniPay,
+    refetch: refetchCollateralBalance
   } = useTokenBalance(collateralToken);
   
   const { 
     balance: borrowBalance, 
     rawBalance: borrowRawBalance, 
-    decimals: borrowDecimals 
+    decimals: borrowDecimals,
+    isMiniPay: isBorrowMiniPay,
+    refetch: refetchBorrowBalance
   } = useTokenBalance(borrowToken);
+
+  // Add effect to refetch balances when using MiniPay
+  useEffect(() => {
+    if (collateralToken && isCollateralMiniPay) {
+      refetchCollateralBalance();
+    }
+  }, [collateralToken, isCollateralMiniPay, refetchCollateralBalance]);
+
+  useEffect(() => {
+    if (borrowToken && isBorrowMiniPay) {
+      refetchBorrowBalance();
+    }
+  }, [borrowToken, isBorrowMiniPay, refetchBorrowBalance]);
 
   // Calculate max borrow amount (70% of collateral value for safety)
   const calculateMaxBorrow = () => {
@@ -80,6 +97,13 @@ export default function Borrow() {
     // Reset amount when token changes
     setCollateralAmount("0.00");
     setCollateralPercentage(null);
+    
+    // Force refetch for MiniPay users
+    if (isCollateralMiniPay) {
+      setTimeout(() => {
+        refetchCollateralBalance();
+      }, 500);
+    }
   };
 
   // Handle borrow token selection
@@ -88,6 +112,13 @@ export default function Borrow() {
     // Reset amount when token changes
     setBorrowAmount("0.00");
     setBorrowPercentage(null);
+    
+    // Force refetch for MiniPay users
+    if (isBorrowMiniPay) {
+      setTimeout(() => {
+        refetchBorrowBalance();
+      }, 500);
+    }
   };
 
   // Handle collateral amount change
