@@ -27,6 +27,7 @@ const SUPPLY_APY_RATES = {
 
 export default function Earn() {
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [overviewOpen, setOverviewOpen] = useState(false);
   const [amount, setAmount] = useState("0.00");
   const [selectedPercentage, setSelectedPercentage] = useState<string | null>(null);
   const [selectedToken, setSelectedToken] = useState<string | null>(null);
@@ -350,7 +351,7 @@ export default function Earn() {
               </div>
               
               {/* Borrow and Multiply options */}
-              <div className="flex mb-8 gap-4">
+              <div className="flex mb-4 gap-4">
                 <Button 
                   variant="outline" 
                   className="flex-1 flex items-center justify-center gap-2"
@@ -361,54 +362,65 @@ export default function Earn() {
                   Borrow
                 </Button>
               </div>
+
+              {/* Overview section toggle */}
+              <button
+                className="w-full border border-primary/50 rounded-lg py-2 text-primary flex items-center justify-center gap-2 mb-4 bg-transparent"
+                onClick={() => setOverviewOpen((v) => !v)}
+                disabled={isLoading}
+              >
+                Overview {overviewOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              </button>
+              
               {/* Overview section */}
-              <div className="mb-4">
-                <h3 className="text-lg text-muted-foreground mb-4">Overview</h3>
-                <Card className="bg-card border p-4 rounded-lg">
-                  <div className="border-b border-border pb-4 mb-4">
-                    <h4 className="text-xl font-semibold mb-4">Pool</h4>
-                    <div className="flex justify-between items-center">
-                      <div>
-                        <p className="text-muted-foreground mb-1">Asset</p>
-                        <div className="flex items-center gap-2">
-                          <TokenIcon symbol={selectedToken} />
-                          <div>
-                            <p className="font-semibold">{amount}</p>
-                            <p className="text-muted-foreground">${amount}</p>
+              {overviewOpen && (
+                <div className="mb-4">
+                  <Card className="bg-card border p-4 rounded-lg">
+                    <div className="border-b border-border pb-4 mb-4">
+                      <h4 className="text-xl font-semibold mb-4">Pool</h4>
+                      <div className="flex justify-between items-center">
+                        <div>
+                          <p className="text-muted-foreground mb-1">Asset</p>
+                          <div className="flex items-center gap-2">
+                            <TokenIcon symbol={selectedToken} />
+                            <div>
+                              <p className="font-semibold">{amount}</p>
+                              <p className="text-muted-foreground">${amount}</p>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                      <div className="w-8 h-8 bg-gray-200 dark:bg-gray-700 rounded-full flex items-center justify-center">
-                        <span className="text-gray-500 dark:text-gray-300">N</span>
+                        <div className="w-8 h-8 bg-gray-200 dark:bg-gray-700 rounded-full flex items-center justify-center">
+                          <span className="text-gray-500 dark:text-gray-300">N</span>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                  
-                  <div className="mb-4">
-                    <div className="flex justify-between items-center mb-2">
-                      <p className="text-muted-foreground">Supply APY</p>
-                      <p className="font-semibold">
-                        {currentApy !== null ? `${currentApy}%` : 'N/A'}
-                      </p>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <div className="flex items-center gap-1">
-                        <p className="text-muted-foreground">Monthly yield</p>
-                        <Info className="h-4 w-4 text-muted-foreground" />
+                    
+                    <div className="mb-4">
+                      <div className="flex justify-between items-center mb-2">
+                        <p className="text-muted-foreground">Supply APY</p>
+                        <p className="font-semibold">
+                          {currentApy !== null ? `${currentApy}%` : 'N/A'}
+                        </p>
                       </div>
-                      <p className="font-semibold">
-                        {selectedToken ? `${monthlyYield} ${selectedToken.toUpperCase()}` : 'N/A'}
-                      </p>
+                      <div className="flex justify-between items-center">
+                        <div className="flex items-center gap-1">
+                          <p className="text-muted-foreground">Monthly yield</p>
+                          <Info className="h-4 w-4 text-muted-foreground" />
+                        </div>
+                        <p className="font-semibold">
+                          {selectedToken ? `${monthlyYield} ${selectedToken.toUpperCase()}` : 'N/A'}
+                        </p>
+                      </div>
                     </div>
-                  </div>
-                  
-                  <div className="rounded-lg bg-blue-50 dark:bg-blue-950 p-3 mb-3 text-xs text-blue-600 dark:text-blue-400">
-                    <p className="font-medium mb-1">Supply-Only Position:</p>
-                    <p>Your deposit will be supplied to Aave on Celo, allowing you to earn interest on your assets.</p>
-                    <p className="mt-1">You'll be able to withdraw your funds at any time from the Positions page.</p>
-                  </div>
-                </Card>
-              </div>
+                    
+                    <div className="rounded-lg bg-blue-50 dark:bg-blue-950 p-3 mb-3 text-xs text-blue-600 dark:text-blue-400">
+                      <p className="font-medium mb-1">Supply-Only Position:</p>
+                      <p>Your deposit will be supplied to Aave on Celo, allowing you to earn interest on your assets.</p>
+                      <p className="mt-1">You'll be able to withdraw your funds at any time from the Positions page.</p>
+                    </div>
+                  </Card>
+                </div>
+              )}
               
               <button
                 className="w-full border border-primary/50 rounded-lg py-2 text-primary flex items-center justify-center gap-2 mb-4 bg-transparent"

@@ -28,6 +28,7 @@ const BORROW_APY_RATES = {
 export default function Borrow() {
   // UI state
   const [detailsOpen, setDetailsOpen] = useState(true);
+  const [overviewOpen, setOverviewOpen] = useState(false);
   
   // Collateral state
   const [collateralToken, setCollateralToken] = useState<string | null>(null);
@@ -540,105 +541,116 @@ export default function Borrow() {
             </div>
           </Card>
 
+          {/* Overview toggle button */}
+          <button
+            className="w-full border border-primary/50 rounded-lg py-2 text-primary flex items-center justify-center gap-2 mb-2 bg-transparent"
+            onClick={() => setOverviewOpen((v) => !v)}
+            disabled={isLoading || isSuccess}
+          >
+            Overview {overviewOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </button>
+
           {/* Overview Card */}
-          <Card className="bg-card p-4 rounded-2xl mb-2">
-            <span className="block text-muted-foreground mb-2">Overview</span>
-            <div className="bg-muted rounded-xl p-4">
-              <div className="flex flex-col md:flex-row gap-4 mb-4">
-                <div className="flex-1">
-                  <span className="block text-lg font-semibold mb-1">Pool</span>
-                  <div className="flex justify-between text-muted-foreground">
-                    <div>
-                      <span className="block font-semibold">Debt</span>
-                      <div className="flex items-center gap-2 mt-1">
-                        {borrowToken && (
-                          <>
-                            <TokenIcon symbol={borrowToken} />
-                            <span className="text-xl font-bold">{borrowAmount}</span>
-                            <span className="text-muted-foreground text-xs">${borrowAmount}</span>
-                          </>
-                        )}
+          {overviewOpen && (
+            <Card className="bg-card p-4 rounded-2xl mb-2">
+              <span className="block text-muted-foreground mb-2">Overview</span>
+              <div className="bg-muted rounded-xl p-4">
+                <div className="flex flex-col md:flex-row gap-4 mb-4">
+                  <div className="flex-1">
+                    <span className="block text-lg font-semibold mb-1">Pool</span>
+                    <div className="flex justify-between text-muted-foreground">
+                      <div>
+                        <span className="block font-semibold">Debt</span>
+                        <div className="flex items-center gap-2 mt-1">
+                          {borrowToken && (
+                            <>
+                              <TokenIcon symbol={borrowToken} />
+                              <span className="text-xl font-bold">{borrowAmount}</span>
+                              <span className="text-muted-foreground text-xs">${borrowAmount}</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      <div>
+                        <span className="block font-semibold">Collateral</span>
+                        <div className="flex items-center gap-2 mt-1">
+                          {collateralToken && (
+                            <>
+                              <TokenIcon symbol={collateralToken} />
+                              <span className="text-xl font-bold">{collateralAmount}</span>
+                              <span className="text-muted-foreground text-xs">${collateralAmount}</span>
+                            </>
+                          )}
+                        </div>
                       </div>
                     </div>
-                    <div>
-                      <span className="block font-semibold">Collateral</span>
-                      <div className="flex items-center gap-2 mt-1">
-                        {collateralToken && (
-                          <>
-                            <TokenIcon symbol={collateralToken} />
-                            <span className="text-xl font-bold">{collateralAmount}</span>
-                            <span className="text-muted-foreground text-xs">${collateralAmount}</span>
-                          </>
-                        )}
-                      </div>
+                  </div>
+                </div>
+                <div className="flex flex-col md:flex-row gap-4 mb-4">
+                  <div className="flex-1">
+                    <div className="flex justify-between text-muted-foreground">
+                      <span>Borrow APR <Info className="inline h-4 w-4 ml-1" /></span>
+                      <span>{getBorrowAPY()}</span>
+                    </div>
+                    <div className="flex justify-between text-muted-foreground mt-2">
+                      <span>Monthly cost</span>
+                      <span>{getMonthlyCost()}</span>
+                    </div>
+                  </div>
+                  <div className="flex-1">
+                    <div className="flex justify-between text-muted-foreground">
+                      <span>Supply APY</span>
+                      <span>{getSupplyAPY()}</span>
+                    </div>
+                    <div className="flex justify-between text-muted-foreground mt-2">
+                      <span>Monthly yield <Info className="inline h-4 w-4 ml-1" /></span>
+                      <span>{getMonthlyYield()}</span>
                     </div>
                   </div>
                 </div>
-              </div>
-              <div className="flex flex-col md:flex-row gap-4 mb-4">
-                <div className="flex-1">
-                  <div className="flex justify-between text-muted-foreground">
-                    <span>Borrow APR <Info className="inline h-4 w-4 ml-1" /></span>
-                    <span>{getBorrowAPY()}</span>
-                  </div>
-                  <div className="flex justify-between text-muted-foreground mt-2">
-                    <span>Monthly cost</span>
-                    <span>{getMonthlyCost()}</span>
-                  </div>
+                <div className="flex flex-col gap-2 mb-2">
+                  <span className="text-muted-foreground">Loan-to-value</span>
+                  <span className="text-2xl font-bold">{calculateLTV()}</span>
                 </div>
-                <div className="flex-1">
-                  <div className="flex justify-between text-muted-foreground">
-                    <span>Supply APY</span>
-                    <span>{getSupplyAPY()}</span>
+                <button
+                  className="w-full border border-primary/50 rounded-lg py-2 text-primary flex items-center justify-center gap-2 mb-4 bg-transparent"
+                  onClick={() => setDetailsOpen((v) => !v)}
+                  disabled={isLoading || isSuccess}
+                >
+                  More details {detailsOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                </button>
+                {detailsOpen && (
+                  <div className="bg-background rounded-lg p-4 mb-4">
+                    <div className="flex justify-between text-muted-foreground mb-2">
+                      <span>Market</span>
+                      <span>Aave Celo Markets</span>
+                      <span className="flex items-center gap-1">Market fee <Info className="h-4 w-4" /> <span>0%</span></span>
+                    </div>
+                    <div className="flex justify-between text-muted-foreground mb-2">
+                      <span>LTV</span>
+                      <span>0% → {calculateLTV()}</span>
+                    </div>
+                    <div className="flex justify-between text-muted-foreground mb-2">
+                      <span>Supplied asset</span>
+                      <span>0 → {collateralAmount} {collateralToken?.toUpperCase() || ''}</span>
+                    </div>
+                    <div className="flex justify-between text-muted-foreground mb-2">
+                      <span>Debt</span>
+                      <span>0 → {borrowAmount} {borrowToken?.toUpperCase() || ''}</span>
+                    </div>
+                    <div className="flex justify-between text-muted-foreground mb-2">
+                      <span>Supply APY</span>
+                      <span>{getSupplyAPY()}</span>
+                    </div>
+                    <div className="flex justify-between text-muted-foreground">
+                      <span>Borrow APR</span>
+                      <span>{getBorrowAPY()}</span>
+                    </div>
                   </div>
-                  <div className="flex justify-between text-muted-foreground mt-2">
-                    <span>Monthly yield <Info className="inline h-4 w-4 ml-1" /></span>
-                    <span>{getMonthlyYield()}</span>
-                  </div>
-                </div>
+                )}
               </div>
-              <div className="flex flex-col gap-2 mb-2">
-                <span className="text-muted-foreground">Loan-to-value</span>
-                <span className="text-2xl font-bold">{calculateLTV()}</span>
-              </div>
-              <button
-                className="w-full border border-primary/50 rounded-lg py-2 text-primary flex items-center justify-center gap-2 mb-4 bg-transparent"
-                onClick={() => setDetailsOpen((v) => !v)}
-                disabled={isLoading || isSuccess}
-              >
-                More details {detailsOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-              </button>
-              {detailsOpen && (
-                <div className="bg-background rounded-lg p-4 mb-4">
-                  <div className="flex justify-between text-muted-foreground mb-2">
-                    <span>Market</span>
-                    <span>Aave Celo Markets</span>
-                    <span className="flex items-center gap-1">Market fee <Info className="h-4 w-4" /> <span>0%</span></span>
-                  </div>
-                  <div className="flex justify-between text-muted-foreground mb-2">
-                    <span>LTV</span>
-                    <span>0% → {calculateLTV()}</span>
-                  </div>
-                  <div className="flex justify-between text-muted-foreground mb-2">
-                    <span>Supplied asset</span>
-                    <span>0 → {collateralAmount} {collateralToken?.toUpperCase() || ''}</span>
-                  </div>
-                  <div className="flex justify-between text-muted-foreground mb-2">
-                    <span>Debt</span>
-                    <span>0 → {borrowAmount} {borrowToken?.toUpperCase() || ''}</span>
-                  </div>
-                  <div className="flex justify-between text-muted-foreground mb-2">
-                    <span>Supply APY</span>
-                    <span>{getSupplyAPY()}</span>
-                  </div>
-                  <div className="flex justify-between text-muted-foreground">
-                    <span>Borrow APR</span>
-                    <span>{getBorrowAPY()}</span>
-                  </div>
-                </div>
-              )}
-            </div>
-          </Card>
+            </Card>
+          )}
 
           <Button 
             className="w-full bg-primary text-primary-foreground text-lg py-4 mt-2"

@@ -22,6 +22,7 @@ import { useRouter } from "next/navigation";
 import { useEmergencyClose } from "@/hooks/useEmergencyClose";
 import { useSupplyPosition } from "@/hooks/useSupplyPosition";
 import { CONTRACT_ADDRESSES, LENDY_POSITION_MANAGER_ABI } from "@/lib/contracts";
+import { TokenIcon } from "@/components/token-icon";
 
 // Debug flag - set to true to show extra debugging information in the UI
 const __DEV__ = process.env.NODE_ENV === 'development';
@@ -728,9 +729,7 @@ export default function Positions() {
                       <span className="block text-xl mb-2">Aave Celo Pool</span>
                       <span className="block text-muted-foreground">Supplied: {position.assetSymbol}</span>
                       <div className="flex items-center gap-2 mt-2 mb-4">
-                        <div className="h-8 w-8 bg-blue-100 dark:bg-blue-900 rounded-full flex items-center justify-center text-blue-500 font-bold">
-                          {position.assetSymbol?.[0]}
-                        </div>
+                        <TokenIcon symbol={position.assetSymbol || null} size="md" />
                         <span className="text-2xl font-bold">{position.formattedAmount}</span>
                         <span className="text-muted-foreground">${position.formattedAmount}</span>
                       </div>
@@ -802,9 +801,7 @@ export default function Positions() {
                         </div>
                       </div>
                       <div className="flex items-center gap-2 mt-3 mb-4">
-                        <div className="h-8 w-8 bg-blue-100 dark:bg-blue-900 rounded-full flex items-center justify-center text-blue-500 font-bold">
-                          {position.borrowAssetSymbol?.[0]}
-                        </div>
+                        <TokenIcon symbol={position.borrowAssetSymbol || null} size="md" />
                         <span className="text-2xl font-bold">{position.formattedBorrowAmount}</span>
                         <span className="text-muted-foreground">${position.formattedBorrowAmount}</span>
                       </div>
